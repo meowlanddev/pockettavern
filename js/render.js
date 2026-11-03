@@ -76,12 +76,43 @@ export function formatMessage(text) {
   html = html.replace(/\u0000(\d+)\u0000/g, (m, i) => stash[+i]);
   // Keep model HTML from escaping its message box.
   html = html.replace(/position\s*:\s*fixed/gi, 'position:relative');
-  return DOMPurify.sanitize(html, {
+  const clean = DOMPurify.sanitize(html, {
     FORCE_BODY: true,
     ADD_TAGS: ['style'],
     ADD_ATTR: ['target', 'open'],
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'meta', 'link', 'base', 'frame', 'frameset'],
+    FORBID_ATTR: ['ping', 'formaction'],
   });
+  return allowExternal ? clean : blockExternal(clean);
+}
+
+// Like SillyTavern's "Forbid external media": messages can't pull images,
+// video or audio from other sites (a card or a prompt injection could use a
+// remote image to leak chat text in its URL). The page's Content Security
+// Policy enforces the same thing for CSS url(); this just shows a clear
+// placeholder instead of a broken image.
+let allowExternal = false;
+export function setExternalMedia(on) { allowExternal = !!on; }
+const REMOTE = /^\s*(?:[a-z][a-z0-9+.-]*:)?\/\//i;
+function blockExternal(html) {
+  if (!/(?:src|poster)\s*=/i.test(html)) return html;
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  for (const el of t.content.querySelectorAll('img, video, audio, source, picture, track, input[type="image"]')) {
+    const src = el.getAttribute('src') || el.getAttribute('poster') || '';
+    const remote = REMOTE.test(src) || REMOTE.test(el.getAttribute('srcset') || '') || REMOTE.test(el.getAttribute('poster') || '');
+    if (!remote) continue;
+    if (el.tagName === 'IMG' || el.tagName === 'VIDEO' || el.tagName === 'AUDIO') {
+      const ph = document.createElement('span');
+      ph.className = 'ext-blocked';
+      ph.textContent = `${el.tagName === 'IMG' ? '🖼' : '🎞'} external ${el.tagName === 'IMG' ? 'image' : 'media'} blocked`;
+      ph.title = 'Allow it in Settings → Interface → Allow external media';
+      el.replaceWith(ph);
+    } else {
+      el.remove();
+    }
+  }
+  return t.innerHTML;
 }
 
 const MESSAGE_CSS = `
@@ -89,6 +120,7 @@ const MESSAGE_CSS = `
 /* Model/preset HTML written for wide PC chats: never wider than the message. */
 [style*="width"] { max-width: 100% !important; box-sizing: border-box; }
 img, svg, video, canvas, iframe { max-width: 100% !important; height: auto; }
+.ext-blocked { display: inline-block; font-size: 0.8em; opacity: 0.7; padding: 2px 8px; border: 1px dashed currentColor; border-radius: 6px; }
 /* "Bleed off the edge" negative margins only make the message scroll sideways. */
 [style*="margin-left:-"], [style*="margin-left: -"] { margin-left: 0 !important; }
 [style*="margin-right:-"], [style*="margin-right: -"] { margin-right: 0 !important; }

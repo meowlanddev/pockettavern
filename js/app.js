@@ -8,7 +8,7 @@ import { evaluateMacros } from './macros.js';
 import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './worldinfo.js';
 import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
 import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
-import { formatMessage, renderInto, setThemeShadowCss } from './render.js';
+import { formatMessage, renderInto, setThemeShadowCss, setExternalMedia } from './render.js';
 import { runScript, COMMANDS } from './stscript.js';
 import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
 import * as MEM from './memory.js';
@@ -37,7 +37,7 @@ function defaultSettings() {
     },
     personas: [{ id: pid, name: 'User', description: '', avatar: null }],
     activePersona: pid,
-    ui: { enterSends: false, fontSize: 16 },
+    ui: { enterSends: false, fontSize: 16, allowExternalMedia: false },
     instruct: { template: 'chatml', saved: [] },
     library: { sort: 'recent', favFirst: true, folders: [] },
     ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS }, ...structuredClone(X.DEFAULT_EXT) },
@@ -2919,7 +2919,8 @@ function renderSettingsView(open) {
 
   const uiBody = `
     ${settingsField('Enter key sends', 'ui.enterSends', 'checkbox', '', 'Off: use the send button on phones')}
-    ${settingsField('Font size', 'ui.fontSize')}`;
+    ${settingsField('Font size', 'ui.fontSize')}
+    ${settingsField('Allow external media', 'ui.allowExternalMedia', 'checkbox', '', 'Off (like SillyTavern): images, video and fonts from other websites inside messages and themes are blocked, so a card or prompt can\'t use them to track you or leak chat text. Turn on if a card\'s pictures are hosted online. The app reloads.')}`;
 
   const dataBody = `
     <div class="field"><span class="label">Move over from SillyTavern</span>
@@ -3305,10 +3306,24 @@ const numOrNull = (v) => (String(v).trim() === '' || Number.isNaN(Number(v)) ? n
 const splitList = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
 
 // ---------- backup ----------
+// Every credential field, wherever it lives (connections, image gen, TTS,
+// memory embeddings, and anything added later that follows the naming).
+const SECRET_FIELD = /(?:api|emb)Key$|secret|password|^token$/i;
+function stripSecrets(o) {
+  if (Array.isArray(o)) { o.forEach(stripSecrets); return o; }
+  if (o && typeof o === 'object') {
+    for (const k of Object.keys(o)) {
+      if (SECRET_FIELD.test(k) && typeof o[k] === 'string') o[k] = '';
+      else stripSecrets(o[k]);
+    }
+  }
+  return o;
+}
+
 async function exportBackup() {
-  const withKeys = confirm('Include API keys in the backup?\n\nOK = include (for restoring on your own device)\nCancel = leave keys out (safe to share)');
+  const withKeys = confirm('Include API keys in the backup?\n\nOK = include keys (keep this file private)\nCancel = leave keys out\n\nEither way the backup holds your chats, characters and personas, so only share it with people you trust.');
   const settings = structuredClone(S.settings);
-  if (!withKeys) settings.connections.forEach((c) => { c.apiKey = ''; });
+  if (!withKeys) stripSecrets(settings);
   const data = {
     app: 'PocketTavern', version: 1, exportedAt: new Date().toISOString(),
     settings, characters: await db.getAll('characters'), chats: await db.getAll('chats'),
@@ -3417,6 +3432,11 @@ function mergeSettings(local, theirs, theirsNewer) {
   out.connections = union(a.connections, b.connections);
   const keys = new Map([...(theirs.connections || []), ...(local.connections || [])].filter((c) => c.apiKey).map((c) => [c.id, c.apiKey]));
   out.connections.forEach((c) => { if (!c.apiKey && keys.get(c.id)) c.apiKey = keys.get(c.id); });
+  for (const k of Object.keys(out.ext)) {
+    for (const f of Object.keys(out.ext[k])) {
+      if (SECRET_FIELD.test(f) && !out.ext[k][f]) out.ext[k][f] = ((local.ext || {})[k] || {})[f] || ((theirs.ext || {})[k] || {})[f] || '';
+    }
+  }
   out.personas = union(a.personas, b.personas);
   out.appearance.saved = union((a.appearance || {}).saved, (b.appearance || {}).saved);
   out.instruct.saved = union((a.instruct || {}).saved, (b.instruct || {}).saved);
@@ -4162,6 +4182,7 @@ document.addEventListener('change', (e) => {
     setPath(el.dataset.bind, el.type === 'checkbox' ? el.checked : el.value);
     saveSettings();
     if (el.dataset.bind === 'ui.fontSize') render();
+    if (el.dataset.bind === 'ui.allowExternalMedia') saveSettings(true).then(() => location.reload());
     return;
   }
   if (el.dataset.extSumSelect === 'position') {
@@ -4375,6 +4396,20 @@ const ICONS = {
 };
 
 // ---------- boot ----------
+// Forbid external media (SillyTavern's default): a browser-enforced policy,
+// so message HTML, regex output and theme CSS can't load images, video,
+// audio or fonts from arbitrary sites. Google Fonts stay allowed for themes.
+// Applied once at startup, before anything is drawn; changing it reloads.
+function applyMediaPolicy() {
+  const allow = !!S.settings.ui.allowExternalMedia;
+  setExternalMedia(allow);
+  if (allow) return;
+  const m = document.createElement('meta');
+  m.httpEquiv = 'Content-Security-Policy';
+  m.content = "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com";
+  document.head.appendChild(m);
+}
+
 async function boot() {
   fitViewport();
   let settings = null;
@@ -4396,6 +4431,7 @@ async function boot() {
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
   if (!settings) await saveSettings(true);
+  applyMediaPolicy();
   await applyLook();
   for (const key of ['presets', 'lorebooks', 'regex', 'groups', 'qr']) {
     try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
