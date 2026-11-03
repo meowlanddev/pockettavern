@@ -70,9 +70,15 @@ function saveSettings(now = false) {
 const activeConn = () => S.settings.connections.find((c) => c.id === S.settings.activeConnection) || null;
 const activePersona = () => S.settings.personas.find((p) => p.id === S.settings.activePersona) || S.settings.personas[0];
 
+// Avatars must be embedded raster images, never remote URLs or active SVG.
+function safeAvatar(src) {
+  return typeof src === 'string' && /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(src) ? src : null;
+}
+
 function avatarHtml(src, name, cls = 'av') {
+  src = safeAvatar(src);
   return src
-    ? `<img class="${cls}" src="${src}" alt="">`
+    ? `<img class="${cls}" src="${esc(src)}" alt="">`
     : `<div class="${cls} av-fallback" style="--h:${hue(name)}">${esc((name || '?').trim()[0]?.toUpperCase() || '?')}</div>`;
 }
 
@@ -911,6 +917,20 @@ async function importBackup() {
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'PocketTavern') throw new Error('Not a PocketTavern backup');
+    if (!Array.isArray(data.characters) || !Array.isArray(data.chats)) throw new Error('Invalid backup lists');
+    // IDs also appear in HTML attributes. Validate before writing any records.
+    function validateRecord(value) {
+      if (!value || typeof value !== 'object') return;
+      for (const [key, item] of Object.entries(value)) {
+        if (['id', 'charId', 'lastChatId', 'activeConnection', 'activePersona'].includes(key)
+            && item != null && (typeof item !== 'string' || !/^[A-Za-z0-9_-]+$/.test(item))) {
+          throw new Error('Invalid identifier in backup');
+        }
+        if (key === 'avatar') value[key] = safeAvatar(item);
+        else if (item && typeof item === 'object') validateRecord(item);
+      }
+    }
+    validateRecord(data);
     const replaceSettings = confirm(`Backup has ${data.characters.length} characters and ${data.chats.length} chats. They will be merged into this device.\n\nAlso replace your settings (connections, prompts, personas)?`);
     for (const c of data.characters) await db.put('characters', c);
     for (const c of data.chats) await db.put('chats', c);
