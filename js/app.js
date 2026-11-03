@@ -1,9 +1,14 @@
 import * as db from './db.js';
-import { parseCardFile, blobToAvatar, exportCardPng, toV2 } from './card.js';
+import { parseCardFile, blobToAvatar, exportCardPng, toV2, isPng, normalizeCard } from './card.js';
 import { buildPrompt, macros } from './prompt.js';
 import { PROVIDERS, generate, listModels } from './api.js';
+import { evaluateMacros } from './macros.js';
+import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './worldinfo.js';
+import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
+import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
+import { formatMessage, renderInto } from './render.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -39,6 +44,9 @@ const S = {
   openActions: null, // message id with action row open
   draft: null, // character being edited
   models: null,
+  presets: [],
+  lorebooks: [],
+  regex: [],
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -69,10 +77,62 @@ function saveSettings(now = false) {
 
 const activeConn = () => S.settings.connections.find((c) => c.id === S.settings.activeConnection) || null;
 const activePersona = () => S.settings.personas.find((p) => p.id === S.settings.activePersona) || S.settings.personas[0];
+const activePreset = () => S.presets.find((p) => p.id === S.settings.activePreset) || null;
+
+const kvTimers = {};
+function saveKv(key, now = false) {
+  clearTimeout(kvTimers[key]);
+  const doSave = () => db.put('kv', S[key], key);
+  if (now) return doSave();
+  kvTimers[key] = setTimeout(doSave, 400);
+}
+const savePresets = (now) => saveKv('presets', now);
+const saveLorebooks = (now) => saveKv('lorebooks', now);
+const saveRegex = (now) => saveKv('regex', now);
+
+const cardScriptCache = new WeakMap();
+function scriptsFor(char) {
+  const list = [...S.regex];
+  const raw = char && char.extensions && char.extensions.regex_scripts;
+  if (char && char.runCardRegex !== false && Array.isArray(raw) && raw.length) {
+    if (!cardScriptCache.has(raw)) {
+      cardScriptCache.set(raw, raw.map((x) => { try { return normalizeScript(x); } catch { return null; } }).filter(Boolean));
+    }
+    list.push(...cardScriptCache.get(raw));
+  }
+  return list;
+}
+
+const embeddedCache = new WeakMap();
+function embeddedEntries(char) {
+  const book = char && char.character_book;
+  if (!book || !book.entries) return [];
+  if (!embeddedCache.has(book)) {
+    let entries = [];
+    try { entries = normalizeBook(book).entries; } catch { /* ignore */ }
+    embeddedCache.set(book, entries);
+  }
+  return embeddedCache.get(book);
+}
+
+function promptFor(chat, char, history) {
+  const conn = activeConn();
+  return buildPrompt({
+    char, persona: activePersona(), settings: S.settings, chat, history,
+    preset: activePreset(), lorebooks: S.lorebooks, regexScripts: scriptsFor(char),
+    model: conn && conn.model, embeddedEntries: embeddedEntries(char),
+  });
+}
+
+// Avatars must be embedded raster images, never remote URLs or active SVG.
+function safeAvatar(src) {
+  return typeof src === 'string' && /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(src) ? src : null;
+}
 
 function avatarHtml(src, name, cls = 'av') {
+  src = safeAvatar(src);
   return src
-    ? `<img class="${cls}" src="${src}" alt="">`
+    ? `<img class="${cls}" src="${esc(src)}" alt="">`
     : `<div class="${cls} av-fallback" style="--h:${hue(name)}">${esc((name || '?').trim()[0]?.toUpperCase() || '?')}</div>`;
 }
 
@@ -84,23 +144,6 @@ function timeAgo(ts) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   if (s < 604800) return `${Math.floor(s / 86400)}d`;
   return new Date(ts).toLocaleDateString();
-}
-
-/** Lightweight roleplay formatter: *actions*, "speech", **bold**, `code`. Input is escaped first. */
-function fmt(text) {
-  const blocks = [];
-  let h = esc(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (m, c) => {
-    blocks.push(`<pre><code>${c}</code></pre>`);
-    return `\u0000${blocks.length - 1}\u0000`;
-  });
-  h = h
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*\w])\*([^*\n]+)\*(?![\w*])/g, '$1<em>$2</em>')
-    .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
-    .replace(/(&quot;|“)([^\n]*?)(&quot;|”)/g, '<span class="q">$1$2$3</span>')
-    .replace(/\n/g, '<br>');
-  return h.replace(/\u0000(\d+)\u0000/g, (m, i) => blocks[+i]);
 }
 
 async function saveFile(blob, name) {
@@ -169,9 +212,12 @@ async function render() {
   S.openActions = null;
   S.editing = null;
   document.documentElement.style.setProperty('--font', `${S.settings.ui.fontSize || 16}px`);
+  if (r.name !== 'preset' && r.name !== 'lorebook') app.dataset.view = '';
   try {
     if (r.name === 'chat' && r.a) await renderChatView(r.a, r.b);
     else if (r.name === 'edit' && r.a) await renderEditView(r.a);
+    else if (r.name === 'preset' && r.a) renderPresetView(r.a);
+    else if (r.name === 'lorebook' && r.a) renderLorebookView(r.a);
     else if (r.name === 'settings') renderSettingsView(r.a);
     else await renderHome();
   } catch (e) {
@@ -192,7 +238,7 @@ async function renderHome() {
     <header class="bar">
       <h1 class="title">PocketTavern</h1>
       <div class="spacer"></div>
-      <button class="icon-btn" data-action="import-cards" aria-label="Import character">${ICONS.import}</button>
+      <button class="icon-btn" data-action="import-files" aria-label="Import character">${ICONS.import}</button>
       <button class="icon-btn" data-action="go" data-to="#/edit/new" aria-label="New character">${ICONS.plus}</button>
       <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Settings">${ICONS.gear}</button>
     </header>
@@ -216,34 +262,88 @@ async function renderHome() {
           <p>No characters yet.</p>
           <p class="muted">Import SillyTavern / TavernAI cards (PNG or JSON), e.g. ones you downloaded from chub.ai, or create your own.</p>
           <div class="row center">
-            <button class="btn primary" data-action="import-cards">Import card</button>
+            <button class="btn primary" data-action="import-files">Import card</button>
             <button class="btn" data-action="go" data-to="#/edit/new">Create character</button>
           </div>
         </div>` : ''}
     </main>`;
 }
 
-async function importCards() {
+const looksRegex = (j) => (Array.isArray(j) ? j.length && j.every((x) => x && typeof x.findRegex === 'string')
+  : !!j && (typeof j.findRegex === 'string' || Array.isArray(j.regex_scripts)));
+
+/** Import anything SillyTavern exports: character cards, presets, lorebooks, regex scripts. */
+async function importFiles() {
   const files = await pickFile('file-cards');
-  let ok = 0;
-  let lastId = null;
+  const done = { chars: 0, presets: 0, books: 0, regex: 0 };
+  let lastChar = null;
+  let lastPreset = null;
+  let lastBook = null;
   for (const f of files) {
     try {
-      const { card, avatarBlob } = await parseCardFile(f);
+      const buf = await f.arrayBuffer();
+      const base = f.name.replace(/\.[^.]+$/, '');
+      let card = null;
+      let avatarBlob = null;
+      if (isPng(buf)) {
+        ({ card, avatarBlob } = await parseCardFile(f));
+      } else {
+        let json;
+        try { json = JSON.parse(new TextDecoder().decode(buf)); } catch { throw new Error(`${f.name}: not a PNG or JSON file`); }
+        if (isSTPreset(json)) {
+          const p = importSTPreset(json, base, db.uid());
+          S.presets.push(p);
+          lastPreset = p;
+          done.presets++;
+          continue;
+        }
+        if (looksRegex(json)) {
+          const list = parseRegexFile(json);
+          S.regex.push(...list);
+          done.regex += list.length;
+          continue;
+        }
+        if (json.entries && !json.spec && !json.first_mes) {
+          const b = normalizeBook(json, base);
+          const book = { id: db.uid(), name: base || b.name, global: false, scanDepth: b.scanDepth, entries: b.entries };
+          S.lorebooks.push(book);
+          lastBook = book;
+          done.books++;
+          continue;
+        }
+        card = normalizeCard(json);
+      }
       const now = Date.now();
-      const c = { id: db.uid(), ...card, avatar: avatarBlob ? await blobToAvatar(avatarBlob) : null, createdAt: now, updatedAt: now };
+      const c = { id: db.uid(), ...card, fileName: base, avatar: avatarBlob ? await blobToAvatar(avatarBlob) : null, createdAt: now, updatedAt: now };
       await db.put('characters', c);
-      ok++;
-      lastId = c.id;
+      lastChar = c;
+      done.chars++;
     } catch (e) {
       toast(e.message, 5000);
     }
   }
-  if (ok) {
-    toast(`Imported ${ok} character${ok > 1 ? 's' : ''}`);
-    if (ok === 1) go(`#/chat/${lastId}`);
-    else render();
+  if (done.presets) await savePresets(true);
+  if (done.books) await saveLorebooks(true);
+  if (done.regex) await saveRegex(true);
+  const parts = [];
+  if (done.chars) parts.push(`${done.chars} character${done.chars > 1 ? 's' : ''}`);
+  if (done.presets) parts.push(`${done.presets} preset${done.presets > 1 ? 's' : ''}`);
+  if (done.books) parts.push(`${done.books} lorebook${done.books > 1 ? 's' : ''}`);
+  if (done.regex) parts.push(`${done.regex} regex script${done.regex > 1 ? 's' : ''}`);
+  if (!parts.length) return;
+  if (lastPreset && confirm(`Use preset "${lastPreset.name}" now?\n\nThis also applies its generation settings (max tokens, context size, temperature…).`)) {
+    S.settings.activePreset = lastPreset.id;
+    applyPresetSamplers(lastPreset);
+    await saveSettings(true);
   }
+  toast(`Imported ${parts.join(', ')}${lastBook ? '. Attach lorebooks to a persona or character, or make them global.' : ''}`, lastBook ? 6000 : 3000);
+  if (done.chars === 1 && parts.length === 1) go(`#/chat/${lastChar.id}`);
+  else render();
+}
+
+function applyPresetSamplers(p) {
+  for (const [k, v] of Object.entries(p.samplers || {})) if (v !== undefined) S.settings.preset[k] = v;
+  saveSettings();
 }
 
 // ---------- CHAT ----------
@@ -342,7 +442,8 @@ function msgHtml(msg, isLast) {
     body = `<textarea class="edit-box" id="edit-box">${esc(raw)}</textarea>
       <div class="row end"><button class="btn sm" data-action="edit-cancel">Cancel</button><button class="btn sm primary" data-action="edit-save" data-id="${msg.id}">Save</button></div>`;
   } else {
-    body = `<div class="text">${raw ? fmt(macros(raw, ctxNames())) : (generatingThis ? '<span class="typing"><i></i><i></i><i></i></span>' : '<span class="muted">(empty)</span>')}</div>`;
+    body = raw ? `<div class="text" data-mid="${msg.id}"></div>`
+      : `<div class="text">${generatingThis ? '<span class="typing"><i></i><i></i><i></i></span>' : '<span class="muted">(empty)</span>'}</div>`;
   }
   const swipes = (!isUser && isLast && !editing && (n > 1 || !msg.greeting))
     ? `<div class="swipes">
@@ -369,6 +470,23 @@ function msgHtml(msg, isLast) {
     </div>`;
 }
 
+function displayHtml(msg) {
+  const msgs = S.chat.messages;
+  const depth = msgs.length - 1 - msgs.indexOf(msg);
+  const env = { char: S.char.name, user: activePersona().name || 'User', vars: { ...(S.chat.vars || {}) } };
+  const macro = (t) => evaluateMacros(t, env);
+  let text = macro(msg.swipes[msg.swipeIdx] || '');
+  text = applyRegex(text, scriptsFor(S.char), { placement: msg.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, isMarkdown: true, depth, macro });
+  return formatMessage(text);
+}
+
+function hydrateMessages(box) {
+  box.querySelectorAll('.text[data-mid]').forEach((el) => {
+    const msg = findMsg(el.dataset.mid);
+    if (msg) renderInto(el, displayHtml(msg));
+  });
+}
+
 function renderMessages(scrollBottom = false) {
   const box = $('#msgs');
   if (!box) return;
@@ -377,6 +495,7 @@ function renderMessages(scrollBottom = false) {
   box.innerHTML = msgs.length
     ? msgs.map((m, i) => msgHtml(m, i === msgs.length - 1)).join('')
     : `<div class="empty muted">Say hello to ${esc(S.char.name)}.</div>`;
+  hydrateMessages(box);
   if (scrollBottom || nearBottom) box.scrollTop = box.scrollHeight;
   const eb = $('#edit-box');
   if (eb) { autosize(eb); eb.focus(); }
@@ -392,7 +511,7 @@ function updateStreamingMessage(msg) {
     const el = box.querySelector(`.msg[data-id="${msg.id}"] .text`);
     if (!el) return;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-    el.innerHTML = fmt(macros(msg.swipes[msg.swipeIdx] || '', ctxNames())) + '<span class="cursor"></span>';
+    renderInto(el, displayHtml(msg) + '<span class="cursor"></span>');
     if (nearBottom) box.scrollTop = box.scrollHeight;
   });
 }
@@ -412,7 +531,9 @@ async function sendMessage() {
   const text = input.value.trim();
   const chat = S.chat;
   if (text) {
-    chat.messages.push({ id: db.uid(), role: 'user', swipes: [text], swipeIdx: 0, ts: Date.now() });
+    const env = { char: S.char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
+    const finalText = applyRegex(text, scriptsFor(S.char), { placement: PLACEMENT.USER, macro: (t) => evaluateMacros(t, env) });
+    chat.messages.push({ id: db.uid(), role: 'user', swipes: [finalText], swipeIdx: 0, ts: Date.now() });
     input.value = '';
     chat.draftInput = '';
     autosize(input);
@@ -447,7 +568,8 @@ async function runGeneration(mode) {
     msg.greeting = false;
   }
   const history = chat.messages.slice(0, chat.messages.indexOf(msg));
-  const { messages } = buildPrompt({ char, persona: activePersona(), settings: S.settings, history });
+  const { messages, vars } = promptFor(chat, char, history);
+  chat.vars = vars;
   const idx = msg.swipeIdx;
   S.generating = chat.id;
   S.abort = new AbortController();
@@ -461,6 +583,10 @@ async function runGeneration(mode) {
       onToken: (t) => { msg.swipes[idx] = t; updateStreamingMessage(msg); },
     });
     msg.swipes[idx] = (text || msg.swipes[idx] || '').replace(/^\s+/, '');
+    if (msg.swipes[idx]) {
+      const env = { char: char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
+      msg.swipes[idx] = applyRegex(msg.swipes[idx], scriptsFor(char), { placement: PLACEMENT.AI, macro: (t) => evaluateMacros(t, env) });
+    }
   } catch (e) {
     if (e.name !== 'AbortError') failed = e;
   } finally {
@@ -530,6 +656,7 @@ function chatMenu() {
       <button data-action="new-chat">${ICONS.plus}<span>New chat</span></button>
       <button data-action="go" data-to="#/edit/${S.char.id}">${ICONS.edit}<span>Edit character</span></button>
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
+      ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
       <button data-action="export-chat">${ICONS.download}<span>Export chat</span></button>
       <button data-action="import-chat">${ICONS.import}<span>Import ST chat</span></button>
       <button data-action="go" data-to="#/settings">${ICONS.gear}<span>Settings</span></button>
@@ -553,10 +680,10 @@ function chatMenu() {
 
 function viewPrompt() {
   const history = S.chat.messages;
-  const { messages, stats } = buildPrompt({ char: S.char, persona: activePersona(), settings: S.settings, history });
+  const { messages, stats } = promptFor({ ...S.chat, vars: { ...(S.chat.vars || {}) } }, S.char, history);
   openSheet(`
     <div class="sheet-title">Prompt preview</div>
-    <p class="muted small">≈${stats.system} tokens of character/system info, ≈${stats.history} tokens of chat history.
+    <p class="muted small">Preset: <b>${esc(stats.preset)}</b>. ≈${stats.system} tokens of prompts/character info, ≈${stats.history} tokens of chat history.
       ${stats.included}/${stats.total} messages fit in the ${S.settings.preset.context_size}-token context.
       ${stats.worldInfo ? `${stats.worldInfo} lorebook entr${stats.worldInfo === 1 ? 'y' : 'ies'} active.` : ''}</p>
     ${messages.map((m) => `<div class="pv"><div class="pv-role">${m.role}</div><pre>${esc(m.content)}</pre></div>`).join('')}
@@ -631,6 +758,7 @@ async function renderEditView(id) {
   const d = S.draft;
   const book = d.character_book && d.character_book.entries;
   const bookCount = book ? (Array.isArray(book) ? book.length : Object.keys(book).length) : 0;
+  const cardRx = Array.isArray(d.extensions && d.extensions.regex_scripts) ? d.extensions.regex_scripts.length : 0;
   app.innerHTML = `
     <header class="bar">
       <button class="icon-btn" data-action="edit-back" aria-label="Back">${ICONS.back}</button>
@@ -662,8 +790,12 @@ async function renderEditView(id) {
       <label class="field"><span class="label">Tags <span class="muted small">(comma separated)</span></span>
         <input data-draft-tags value="${esc((d.tags || []).join(', '))}" autocomplete="off"></label>
       <label class="field"><span class="label">Creator</span><input data-draft="creator" value="${esc(d.creator)}" autocomplete="off"></label>
-      <div class="field"><span class="label">Lorebook</span>
-        <span class="hint">${bookCount ? `Embedded lorebook with ${bookCount} entr${bookCount === 1 ? 'y' : 'ies'} — activated automatically by keywords.` : 'No embedded lorebook.'}</span></div>
+      <div class="field"><span class="label">Lorebooks</span>
+        ${bookCount ? `<label class="check"><input type="checkbox" data-draft-flag="embedded" ${d.disableEmbeddedBook ? '' : 'checked'}> Embedded lorebook (${bookCount} entr${bookCount === 1 ? 'y' : 'ies'})</label>` : ''}
+        ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-draft-book="${b.id}" ${(d.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}${b.global ? ' <span class="hint">(global, always on)</span>' : ''}</label>`).join('')}
+        ${!bookCount && !S.lorebooks.length ? '<span class="hint">No lorebooks yet. Import one from the home screen or Settings → Lorebooks.</span>' : ''}
+      </div>
+      ${cardRx ? `<div class="field"><span class="label">Regex</span><label class="check"><input type="checkbox" data-draft-flag="cardRegex" ${d.runCardRegex === false ? '' : 'checked'}> Run this card's ${cardRx} regex script${cardRx === 1 ? '' : 's'}</label></div>` : ''}
       ${d.isNew ? '' : `
       <div class="row wrap">
         <button class="btn" data-action="char-export-png">${ICONS.download} Export PNG card</button>
@@ -682,6 +814,12 @@ function collectDraft() {
   if (tags) d.tags = tags.value.split(',').map((t) => t.trim()).filter(Boolean);
   const alts = [...document.querySelectorAll('[data-alt]')].map((el) => el.value);
   d.alternate_greetings = alts;
+  const books = document.querySelectorAll('[data-draft-book]');
+  if (books.length) d.lorebooks = [...books].filter((el) => el.checked).map((el) => el.dataset.draftBook);
+  const emb = document.querySelector('[data-draft-flag="embedded"]');
+  if (emb) d.disableEmbeddedBook = !emb.checked;
+  const crx = document.querySelector('[data-draft-flag="cardRegex"]');
+  if (crx) d.runCardRegex = crx.checked;
   return d;
 }
 
@@ -768,13 +906,63 @@ function renderSettingsView(open) {
     ${settingsField('Repetition penalty', 'preset.repetition_penalty', 'number', '', '1 = off')}
     <h4 class="sub">Claude (direct API)</h4>
     ${settingsField('Send temperature to Claude', 'preset.claude_sampling', 'checkbox', '', 'Only for older Claude models — current ones reject sampling settings.')}
-    <label class="field inline"><span class="label">Effort<span class="hint">How hard Claude thinks before replying</span></span>
+    <label class="field inline"><span class="label">Reasoning effort<span class="hint">Claude direct, and OpenRouter (low–high)</span></span>
       <select data-bind="preset.claude_effort">
         ${['', 'low', 'medium', 'high', 'xhigh', 'max'].map((e) => `<option value="${e}" ${p.claude_effort === e ? 'selected' : ''}>${e || 'model default'}</option>`).join('')}
       </select></label>
     <button class="btn sm" data-action="reset-preset">Reset to defaults</button>`;
 
+  const preset = activePreset();
+  const presetBody = `
+    <label class="field"><span class="label">Active preset</span>
+      <select data-change="select-preset">
+        <option value="">Simple (built-in)</option>
+        ${S.presets.map((x) => `<option value="${x.id}" ${preset && preset.id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+      </select></label>
+    ${preset ? `
+      <p class="hint">${preset.order.filter((o) => o.enabled).length} of ${preset.order.length} prompts enabled.</p>
+      <div class="row wrap">
+        <button class="btn primary" data-action="go" data-to="#/preset/${preset.id}">${ICONS.sliders} Prompts & toggles</button>
+        <button class="btn" data-action="preset-apply-samplers" data-id="${preset.id}">Apply its generation settings</button>
+        <button class="btn" data-action="preset-export" data-id="${preset.id}">${ICONS.download} Export</button>
+        <button class="btn danger" data-action="preset-delete" data-id="${preset.id}">${ICONS.trash} Delete</button>
+      </div>` : '<p class="hint">Simple uses the main and post-history prompts from the Prompts section below. Import a SillyTavern chat-completion preset to use its full prompt manager.</p>'}
+    <button class="btn" data-action="import-files">${ICONS.import} Import SillyTavern preset</button>`;
+
+  const lorebookBody = `
+    ${S.lorebooks.map((b) => {
+      const where = [b.global ? 'global' : '', S.settings.personas.filter((x) => (x.lorebooks || []).includes(b.id)).map((x) => 'persona: ' + x.name).join(', ')].filter(Boolean).join(' · ');
+      return `<div class="list-row">
+        <button class="grow lr-btn" data-action="go" data-to="#/lorebook/${b.id}">
+          <span class="lr-title">${esc(b.name)}</span>
+          <span class="hint">${b.entries.length} entr${b.entries.length === 1 ? 'y' : 'ies'}${where ? ' · ' + esc(where) : ''}</span>
+        </button>
+        <span class="hint">Global</span>
+        <label class="toggle mini"><input type="checkbox" data-lb-global="${b.id}" ${b.global ? 'checked' : ''}><i></i></label>
+      </div>`;
+    }).join('') || '<p class="muted">No lorebooks yet.</p>'}
+    <p class="hint">Global lorebooks apply to every chat. You can also attach a lorebook to a persona (Persona section) or to a character (Edit character). Cards with embedded lorebooks work automatically.</p>
+    <div class="row wrap">
+      <button class="btn" data-action="import-files">${ICONS.import} Import</button>
+      <button class="btn" data-action="lb-new">${ICONS.plus} New lorebook</button>
+    </div>`;
+
+  const regexBody = `
+    ${S.regex.map((r, i) => `<div class="list-row">
+      <label class="toggle mini"><input type="checkbox" data-rx-toggle="${i}" ${r.disabled ? '' : 'checked'}><i></i></label>
+      <button class="grow lr-btn" data-action="rx-edit" data-i="${i}">
+        <span class="lr-title">${esc(r.scriptName)}</span>
+        <span class="hint">${r.placement.map((x) => PLACEMENT_LABELS[x] || x).join(', ')}${r.markdownOnly ? ' · display only' : ''}${r.promptOnly ? ' · prompt only' : ''}</span>
+      </button>
+    </div>`).join('') || '<p class="muted">No regex scripts yet.</p>'}
+    <p class="hint">Scripts embedded in character cards run too (toggle per character in Edit character).</p>
+    <div class="row wrap">
+      <button class="btn" data-action="import-files">${ICONS.import} Import</button>
+      <button class="btn" data-action="rx-new">${ICONS.plus} New script</button>
+    </div>`;
+
   const promptBody = `
+    <p class="hint">The main and post-history prompts are used by the Simple preset. The two “Use character’s…” switches and the scan depth apply to every preset.</p>
     ${settingsField('Main prompt', 'prompt.main', 'textarea', '', 'Sent first, before the character description.')}
     <button class="btn sm" data-action="reset-main">Reset main prompt</button>
     ${settingsField('Post-history instructions', 'prompt.post_history', 'textarea', '', 'Sent after the chat history, every turn (a.k.a. jailbreak / author’s note).')}
@@ -791,6 +979,9 @@ function renderSettingsView(open) {
     <div class="row"><button class="avatar-pick" data-action="persona-avatar">${avatarHtml(persona.avatar, persona.name, 'av lg')}</button>
       <div class="grow">${settingsField('Your name', 'persona.name', 'text')}</div></div>
     ${settingsField('Description', 'persona.description', 'textarea', '', 'Who you are in the story. Sent to the AI.')}
+    <div class="field"><span class="label">Lorebooks for this persona</span>
+      ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
+    </div>
     ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}`;
 
   const uiBody = `
@@ -812,9 +1003,12 @@ function renderSettingsView(open) {
     </header>
     <main class="scroll pad">
       ${sec('connection', 'API connection', connBody)}
+      ${sec('preset', 'Preset (prompt manager)', presetBody)}
       ${sec('generation', 'Generation', genBody)}
-      ${sec('prompt', 'Prompts', promptBody)}
       ${sec('persona', 'Persona (you)', personaBody)}
+      ${sec('lorebooks', 'Lorebooks', lorebookBody)}
+      ${sec('regex', 'Regex scripts', regexBody)}
+      ${sec('prompt', 'Prompts (Simple preset)', promptBody)}
       ${sec('ui', 'Interface', uiBody)}
       ${sec('data', 'Data & backup', dataBody)}
       <p class="muted small center">PocketTavern ${VERSION}</p>
@@ -891,6 +1085,210 @@ async function testConnection() {
   }
 }
 
+// ---------- PRESET (prompt manager) ----------
+function presetById(id) {
+  const p = S.presets.find((x) => x.id === id);
+  if (!p) throw new Error('Preset not found');
+  return p;
+}
+
+function renderPresetView(id) {
+  const p = presetById(id);
+  S.pmId = id;
+  const byId = new Map(p.prompts.map((x) => [x.identifier, x]));
+  const q = (S.pmQuery || '').toLowerCase();
+  const scroll = $('main.scroll')?.scrollTop || 0;
+  const wasSame = app.dataset.view === 'preset:' + id;
+  app.dataset.view = 'preset:' + id;
+  app.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn" data-action="go-back" aria-label="Back">${ICONS.back}</button>
+      <h1 class="title">${esc(p.name)}</h1>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-action="pm-add" aria-label="Add prompt">${ICONS.plus}</button>
+    </header>
+    <main class="scroll pad">
+      ${S.settings.activePreset !== id ? `<button class="banner warn" data-action="preset-activate" data-id="${id}">This preset isn't active. Tap to use it.</button>` : ''}
+      <p class="hint">Switch prompts on and off like SillyTavern's prompt manager. Tap a name to read or edit it.</p>
+      <input class="search" type="search" placeholder="Search prompts" value="${esc(S.pmQuery || '')}" data-input="pm-search">
+      <div class="pm-list">
+        ${p.order.map((o, i) => {
+          const x = byId.get(o.identifier);
+          if (!x || (q && !x.name.toLowerCase().includes(q))) return '';
+          const header = /^\s*[═─━—=]{2,}/.test(x.name);
+          const badges = [
+            AUTO_SLOTS.has(x.identifier) ? '<span class="badge slot">auto</span>' : '',
+            x.role && x.role !== 'system' ? `<span class="badge">${x.role}</span>` : '',
+            x.injection_position === 1 ? `<span class="badge">@${x.injection_depth}</span>` : '',
+            !AUTO_SLOTS.has(x.identifier) && x.content ? `<span class="badge muted">${Math.ceil(x.content.length / 3.5)}t</span>` : '',
+          ].join('');
+          return `<div class="pm-row ${o.enabled ? '' : 'off'} ${header ? 'hdr' : ''}">
+            <label class="toggle mini"><input type="checkbox" data-pm-toggle="${i}" ${o.enabled ? 'checked' : ''}><i></i></label>
+            <button class="pm-name" data-action="pm-edit" data-i="${i}"><span class="pm-title">${esc(x.name)}</span>${badges}</button>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="row wrap">
+        <button class="btn" data-action="pm-add">${ICONS.plus} Add prompt</button>
+        <button class="btn" data-action="preset-export" data-id="${id}">${ICONS.download} Export</button>
+      </div>
+      <div class="bottom-space"></div>
+    </main>`;
+  if (wasSame) $('main.scroll').scrollTop = scroll;
+}
+
+function pmEdit(i) {
+  const p = presetById(S.pmId);
+  const o = p.order[i];
+  const x = p.prompts.find((y) => y.identifier === o.identifier);
+  const auto = AUTO_SLOTS.has(x.identifier);
+  openSheet(`
+    <div class="sheet-title">${esc(x.name)}</div>
+    ${auto ? `<p class="hint">This slot is filled automatically with the ${esc(MARKER_LABELS[x.identifier] || x.identifier)}.</p>` : `
+      <label class="field"><span class="label">Name</span><input id="pm-name" value="${esc(x.name)}"></label>
+      <div class="row wrap">
+        <label class="field grow"><span class="label">Role</span><select id="pm-role">
+          ${['system', 'user', 'assistant'].map((r) => `<option ${x.role === r ? 'selected' : ''}>${r}</option>`).join('')}
+        </select></label>
+        <label class="field grow"><span class="label">Position</span><select id="pm-pos">
+          <option value="0" ${x.injection_position !== 1 ? 'selected' : ''}>In prompt order</option>
+          <option value="1" ${x.injection_position === 1 ? 'selected' : ''}>In chat @ depth</option>
+        </select></label>
+        <label class="field" style="width:90px"><span class="label">Depth</span><input id="pm-depth" inputmode="numeric" value="${x.injection_depth ?? 4}"></label>
+      </div>
+      <label class="field"><span class="label">Content</span><textarea id="pm-content" rows="14">${esc(x.content)}</textarea>
+        <span class="hint">Macros like {{char}}, {{user}}, {{setvar::name::value}}, {{getvar::name}}, {{random::a::b}}, {{trim}} work.</span></label>`}
+    <div class="row wrap">
+      <button class="btn sm" data-action="pm-move" data-i="${i}" data-dir="-1">Move up</button>
+      <button class="btn sm" data-action="pm-move" data-i="${i}" data-dir="1">Move down</button>
+      ${!auto ? `<button class="btn sm danger" data-action="pm-delete" data-i="${i}">${ICONS.trash} Delete</button>` : ''}
+    </div>
+    ${!auto ? `<button class="btn primary block" data-action="pm-save" data-i="${i}">Save</button>` : ''}
+  `, 'tall');
+}
+
+// ---------- LOREBOOK editor ----------
+function bookById(id) {
+  const b = S.lorebooks.find((x) => x.id === id);
+  if (!b) throw new Error('Lorebook not found');
+  return b;
+}
+
+function entryTitle(e) {
+  return e.comment || e.keys.join(', ') || '(untitled entry)';
+}
+
+function renderLorebookView(id) {
+  const b = bookById(id);
+  S.lbId = id;
+  const q = (S.lbQuery || '').toLowerCase();
+  const scroll = $('main.scroll')?.scrollTop || 0;
+  const wasSame = app.dataset.view === 'lorebook:' + id;
+  app.dataset.view = 'lorebook:' + id;
+  app.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn" data-action="go-back" aria-label="Back">${ICONS.back}</button>
+      <h1 class="title">Lorebook</h1>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-action="le-add" aria-label="Add entry">${ICONS.plus}</button>
+    </header>
+    <main class="scroll pad">
+      <label class="field"><span class="label">Name</span><input data-lb-name value="${esc(b.name)}" autocomplete="off"></label>
+      <label class="toggle"><span><span class="label">Global</span><span class="hint">Active in every chat</span></span>
+        <input type="checkbox" data-lb-global="${b.id}" ${b.global ? 'checked' : ''}><i></i></label>
+      <input class="search" type="search" placeholder="Search entries" value="${esc(S.lbQuery || '')}" data-input="lb-search">
+      <div class="pm-list">
+        ${b.entries.map((e, i) => {
+          if (q && !(entryTitle(e) + ' ' + e.keys.join(' ') + ' ' + e.content).toLowerCase().includes(q)) return '';
+          const meta = [
+            e.constant ? '<span class="badge slot">always</span>' : (e.keys.length ? `<span class="badge">${esc(e.keys.slice(0, 3).join(', '))}${e.keys.length > 3 ? '…' : ''}</span>` : '<span class="badge muted">no keys</span>'),
+            e.group ? `<span class="badge">group: ${esc(e.group)}${e.groupOverride ? ' ★' : ''}</span>` : '',
+            e.characterFilter && e.characterFilter.names.length ? `<span class="badge">${e.characterFilter.isExclude ? 'not ' : ''}${e.characterFilter.names.length} char</span>` : '',
+            e.position === 4 ? `<span class="badge">@${e.depth}</span>` : '',
+          ].join('');
+          return `<div class="pm-row ${e.enabled ? '' : 'off'}">
+            <label class="toggle mini"><input type="checkbox" data-le-toggle="${i}" ${e.enabled ? 'checked' : ''}><i></i></label>
+            <button class="pm-name" data-action="le-edit" data-i="${i}"><span class="pm-title">${esc(entryTitle(e))}</span>${meta}</button>
+          </div>`;
+        }).join('') || '<p class="muted">No entries.</p>'}
+      </div>
+      <div class="row wrap">
+        <button class="btn" data-action="le-add">${ICONS.plus} Add entry</button>
+        <button class="btn" data-action="lb-export">${ICONS.download} Export</button>
+        <button class="btn danger" data-action="lb-delete">${ICONS.trash} Delete lorebook</button>
+      </div>
+      <div class="bottom-space"></div>
+    </main>`;
+  if (wasSame) $('main.scroll').scrollTop = scroll;
+}
+
+function leEdit(i) {
+  const b = bookById(S.lbId);
+  const e = b.entries[i];
+  const f = e.characterFilter || { isExclude: false, names: [] };
+  const chk = (id, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i></label>`;
+  openSheet(`
+    <div class="sheet-title">${esc(entryTitle(e))}</div>
+    <label class="field"><span class="label">Title / memo</span><input id="le-comment" value="${esc(e.comment)}"></label>
+    <label class="field"><span class="label">Content</span><textarea id="le-content" rows="8">${esc(e.content)}</textarea></label>
+    ${chk('le-constant', e.constant, 'Always active', 'Ignore keywords; always insert (still subject to groups & filters)')}
+    <label class="field"><span class="label">Keywords <span class="hint">(comma separated, /regex/ allowed)</span></span><input id="le-keys" value="${esc(e.keys.join(', '))}" autocapitalize="off"></label>
+    <label class="field"><span class="label">Secondary keywords <span class="hint">(optional)</span></span><input id="le-secondary" value="${esc(e.secondary.join(', '))}" autocapitalize="off"></label>
+    <div class="row wrap">
+      <label class="field grow"><span class="label">Secondary logic</span><select id="le-logic">${Object.entries(LOGIC).map(([k, v]) => `<option value="${k}" ${e.selectiveLogic === +k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="field" style="width:90px"><span class="label">Order</span><input id="le-order" inputmode="numeric" value="${e.order}"></label>
+    </div>
+    <div class="row wrap">
+      <label class="field grow"><span class="label">Position</span><select id="le-position">${Object.entries(POSITIONS).map(([k, v]) => `<option value="${k}" ${e.position === +k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="field" style="width:80px"><span class="label">Depth</span><input id="le-depth" inputmode="numeric" value="${e.depth}"></label>
+      <label class="field" style="width:120px"><span class="label">Role</span><select id="le-role">${['system', 'user', 'assistant'].map((r, k) => `<option value="${k}" ${e.role === k ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+    </div>
+    <div class="row wrap">
+      <label class="field grow"><span class="label">Inclusion group</span><input id="le-group" value="${esc(e.group)}" autocapitalize="off"></label>
+      <label class="field" style="width:110px"><span class="label">Probability %</span><input id="le-prob" inputmode="numeric" value="${e.probability}"></label>
+    </div>
+    ${chk('le-override', e.groupOverride, 'Group priority', 'Wins its inclusion group over non-priority entries')}
+    <label class="field"><span class="label">Only for characters <span class="hint">(comma separated names; empty = all)</span></span><input id="le-chars" value="${esc(f.names.join(', '))}"></label>
+    ${chk('le-exclude', f.isExclude, 'Exclude those characters instead')}
+    ${chk('le-whole', e.matchWholeWords, 'Match whole words only')}
+    ${chk('le-case', e.caseSensitive, 'Case sensitive')}
+    ${chk('le-persona', e.matchPersonaDescription, 'Also scan the persona description')}
+    <div class="row wrap">
+      <button class="btn danger" data-action="le-delete" data-i="${i}">${ICONS.trash} Delete entry</button>
+    </div>
+    <button class="btn primary block" data-action="le-save" data-i="${i}">Save</button>
+  `, 'tall');
+}
+
+function regexEdit(i) {
+  const r = i === -1 ? normalizeScript({ scriptName: 'New script', findRegex: '', placement: [2] }) : S.regex[i];
+  const chk = (id, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i></label>`;
+  openSheet(`
+    <div class="sheet-title">${i === -1 ? 'New regex script' : esc(r.scriptName)}</div>
+    <label class="field"><span class="label">Name</span><input id="rx-name" value="${esc(r.scriptName)}"></label>
+    <label class="field"><span class="label">Find regex</span><input id="rx-find" value="${esc(r.findRegex)}" autocapitalize="off" spellcheck="false" placeholder="/pattern/g"></label>
+    <label class="field"><span class="label">Replace with <span class="hint">($1, {{match}}, macros)</span></span><textarea id="rx-replace" rows="5" spellcheck="false">${esc(r.replaceString)}</textarea></label>
+    <label class="field"><span class="label">Trim out <span class="hint">(one per line)</span></span><textarea id="rx-trim" rows="2">${esc(r.trimStrings.join('\n'))}</textarea></label>
+    <div class="field"><span class="label">Affects</span>
+      ${Object.entries(PLACEMENT_LABELS).map(([k, v]) => `<label class="check"><input type="checkbox" data-rx-place="${k}" ${r.placement.includes(+k) ? 'checked' : ''}> ${v}</label>`).join('')}
+    </div>
+    ${chk('rx-md', r.markdownOnly, 'Display only', 'Changes how messages look, not the saved text')}
+    ${chk('rx-prompt', r.promptOnly, 'Prompt only', 'Changes what is sent to the AI, not the saved text')}
+    ${chk('rx-edit', r.runOnEdit, 'Run on edit')}
+    <div class="row wrap">
+      <label class="field grow"><span class="label">Min depth</span><input id="rx-min" inputmode="numeric" value="${r.minDepth ?? ''}" placeholder="any"></label>
+      <label class="field grow"><span class="label">Max depth</span><input id="rx-max" inputmode="numeric" value="${r.maxDepth ?? ''}" placeholder="any"></label>
+    </div>
+    <div class="row wrap">
+      ${i !== -1 ? `<button class="btn" data-action="rx-export" data-i="${i}">${ICONS.download} Export</button><button class="btn danger" data-action="rx-delete" data-i="${i}">${ICONS.trash} Delete</button>` : ''}
+    </div>
+    <button class="btn primary block" data-action="rx-save" data-i="${i}">Save</button>
+  `, 'tall');
+}
+
+const numOrNull = (v) => (String(v).trim() === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const splitList = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
+
 // ---------- backup ----------
 async function exportBackup() {
   const withKeys = confirm('Include API keys in the backup?\n\nOK = include (for restoring on your own device)\nCancel = leave keys out (safe to share)');
@@ -899,6 +1297,7 @@ async function exportBackup() {
   const data = {
     app: 'PocketTavern', version: 1, exportedAt: new Date().toISOString(),
     settings, characters: await db.getAll('characters'), chats: await db.getAll('chats'),
+    presets: S.presets, lorebooks: S.lorebooks, regex: S.regex,
   };
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -911,9 +1310,30 @@ async function importBackup() {
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'PocketTavern') throw new Error('Not a PocketTavern backup');
+    if (!Array.isArray(data.characters) || !Array.isArray(data.chats)) throw new Error('Invalid backup lists');
+    // IDs also appear in HTML attributes. Validate before writing any records.
+    function validateRecord(value) {
+      if (!value || typeof value !== 'object') return;
+      for (const [key, item] of Object.entries(value)) {
+        if (['id', 'charId', 'lastChatId', 'activeConnection', 'activePersona', 'activePreset'].includes(key)
+            && item != null && (typeof item !== 'string' || !/^[A-Za-z0-9_-]+$/.test(item))) {
+          throw new Error('Invalid identifier in backup');
+        }
+        if (key === 'avatar') value[key] = safeAvatar(item);
+        else if (item && typeof item === 'object') validateRecord(item);
+      }
+    }
+    validateRecord(data);
     const replaceSettings = confirm(`Backup has ${data.characters.length} characters and ${data.chats.length} chats. They will be merged into this device.\n\nAlso replace your settings (connections, prompts, personas)?`);
     for (const c of data.characters) await db.put('characters', c);
     for (const c of data.chats) await db.put('chats', c);
+    const merge = (key, list) => {
+      if (!Array.isArray(list)) return;
+      const ids = new Map(S[key].map((x, i) => [x.id, i]));
+      for (const x of list) { if (ids.has(x.id)) S[key][ids.get(x.id)] = x; else S[key].push(x); }
+    };
+    merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex);
+    await savePresets(true); await saveLorebooks(true); await saveRegex(true);
     if (replaceSettings && data.settings) {
       const keep = new Map(S.settings.connections.map((c) => [c.id, c.apiKey]));
       S.settings = { ...defaultSettings(), ...data.settings };
@@ -932,12 +1352,14 @@ const actions = {
   go: (el) => go(el.dataset.to),
   'go-back': () => (history.length > 1 ? history.back() : go('#/')),
   'close-sheet': closeSheet,
-  'import-cards': importCards,
+  'import-files': importFiles,
 
   send: sendMessage,
   stop: () => { if (S.abort) S.abort.abort(); },
-  'toggle-msg': (el) => {
+  'toggle-msg': (el, e) => {
     if (S.editing) return;
+    const inner = e && e.composedPath && e.composedPath()[0];
+    if (inner && inner.closest && inner.closest('summary, a, button, input, label, select, details[open] *')) return;
     if (window.getSelection && String(window.getSelection()).length) return;
     S.openActions = S.openActions === el.dataset.id ? null : el.dataset.id;
     renderMessages();
@@ -947,7 +1369,11 @@ const actions = {
   'edit-cancel': () => { S.editing = null; renderMessages(); },
   'edit-save': async (el) => {
     const msg = findMsg(el.dataset.id);
-    if (msg) msg.swipes[msg.swipeIdx] = $('#edit-box').value;
+    if (msg) {
+      const env = { char: S.char.name, user: activePersona().name, vars: { ...(S.chat.vars || {}) } };
+      const scripts = scriptsFor(S.char).filter((x) => x.runOnEdit);
+      msg.swipes[msg.swipeIdx] = applyRegex($('#edit-box').value, scripts, { placement: msg.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, macro: (t) => evaluateMacros(t, env) });
+    }
     S.editing = null;
     await saveChat(S.chat);
     renderMessages();
@@ -1048,6 +1474,145 @@ const actions = {
     go('#/');
   },
 
+  'preset-activate': (el) => { S.settings.activePreset = el.dataset.id; saveSettings(); toast('Preset activated'); render(); },
+  'preset-apply-samplers': (el) => {
+    const p = presetById(el.dataset.id);
+    applyPresetSamplers(p);
+    toast(`Applied: max tokens ${S.settings.preset.max_tokens}, context ${S.settings.preset.context_size}, temp ${S.settings.preset.temperature}`, 4000);
+    rerenderSettings();
+  },
+  'preset-export': async (el) => {
+    const p = presetById(el.dataset.id);
+    await saveFile(new Blob([JSON.stringify(exportSTPreset(p), null, 2)], { type: 'application/json' }), `${safeName(p.name)}.json`);
+  },
+  'preset-delete': (el) => {
+    const p = presetById(el.dataset.id);
+    if (!confirm(`Delete preset "${p.name}"?`)) return;
+    S.presets = S.presets.filter((x) => x.id !== p.id);
+    if (S.settings.activePreset === p.id) S.settings.activePreset = null;
+    savePresets(); saveSettings(); rerenderSettings();
+  },
+  'pm-edit': (el) => pmEdit(+el.dataset.i),
+  'pm-save': (el) => {
+    const p = presetById(S.pmId);
+    const o = p.order[+el.dataset.i];
+    const x = p.prompts.find((y) => y.identifier === o.identifier);
+    x.name = $('#pm-name').value.trim() || x.name;
+    x.role = $('#pm-role').value;
+    x.injection_position = +$('#pm-pos').value;
+    x.injection_depth = numOrNull($('#pm-depth').value) ?? 4;
+    x.content = $('#pm-content').value;
+    savePresets(); closeSheet(); renderPresetView(p.id);
+  },
+  'pm-move': (el) => {
+    const p = presetById(S.pmId);
+    const i = +el.dataset.i;
+    const j = i + +el.dataset.dir;
+    if (j < 0 || j >= p.order.length) return;
+    [p.order[i], p.order[j]] = [p.order[j], p.order[i]];
+    savePresets(); renderPresetView(p.id); pmEdit(j);
+  },
+  'pm-delete': (el) => {
+    const p = presetById(S.pmId);
+    const o = p.order[+el.dataset.i];
+    if (!confirm('Delete this prompt?')) return;
+    p.order.splice(+el.dataset.i, 1);
+    p.prompts = p.prompts.filter((y) => y.identifier !== o.identifier);
+    savePresets(); closeSheet(); renderPresetView(p.id);
+  },
+  'pm-add': () => {
+    const p = presetById(S.pmId);
+    const x = { identifier: db.uid(), name: 'New prompt', role: 'system', content: '', marker: false, system_prompt: false, injection_position: 0, injection_depth: 4, injection_order: 100, forbid_overrides: false };
+    p.prompts.push(x);
+    const hist = p.order.findIndex((o) => o.identifier === 'chatHistory');
+    const at = hist >= 0 ? hist : p.order.length;
+    p.order.splice(at, 0, { identifier: x.identifier, enabled: true });
+    savePresets(); renderPresetView(p.id); pmEdit(at);
+  },
+
+  'lb-new': () => {
+    const b = { id: db.uid(), name: 'New lorebook', global: false, entries: [] };
+    S.lorebooks.push(b); saveLorebooks(); go(`#/lorebook/${b.id}`);
+  },
+  'lb-export': async () => {
+    const b = bookById(S.lbId);
+    await saveFile(new Blob([JSON.stringify(exportBook(b), null, 2)], { type: 'application/json' }), `${safeName(b.name)}.json`);
+  },
+  'lb-delete': () => {
+    const b = bookById(S.lbId);
+    if (!confirm(`Delete lorebook "${b.name}"?`)) return;
+    S.lorebooks = S.lorebooks.filter((x) => x.id !== b.id);
+    saveLorebooks(); go('#/settings/lorebooks');
+  },
+  'le-edit': (el) => leEdit(+el.dataset.i),
+  'le-add': () => {
+    const b = bookById(S.lbId);
+    b.entries.push(normalizeEntry({ comment: '', key: [], content: '' }, b.entries.length));
+    saveLorebooks(); renderLorebookView(b.id); leEdit(b.entries.length - 1);
+  },
+  'le-delete': (el) => {
+    const b = bookById(S.lbId);
+    if (!confirm('Delete this entry?')) return;
+    b.entries.splice(+el.dataset.i, 1);
+    saveLorebooks(); closeSheet(); renderLorebookView(b.id);
+  },
+  'le-save': (el) => {
+    const b = bookById(S.lbId);
+    const e = b.entries[+el.dataset.i];
+    const names = splitList($('#le-chars').value);
+    Object.assign(e, {
+      comment: $('#le-comment').value.trim(),
+      content: $('#le-content').value,
+      constant: $('#le-constant').checked,
+      keys: splitList($('#le-keys').value),
+      secondary: splitList($('#le-secondary').value),
+      selectiveLogic: +$('#le-logic').value,
+      order: numOrNull($('#le-order').value) ?? 100,
+      position: +$('#le-position').value,
+      depth: numOrNull($('#le-depth').value) ?? 4,
+      role: +$('#le-role').value,
+      group: $('#le-group').value.trim(),
+      probability: numOrNull($('#le-prob').value) ?? 100,
+      groupOverride: $('#le-override').checked,
+      characterFilter: names.length ? { isExclude: $('#le-exclude').checked, names, tags: [] } : null,
+      matchWholeWords: $('#le-whole').checked,
+      caseSensitive: $('#le-case').checked,
+      matchPersonaDescription: $('#le-persona').checked,
+    });
+    saveLorebooks(); closeSheet(); renderLorebookView(b.id);
+  },
+
+  'rx-new': () => regexEdit(-1),
+  'rx-edit': (el) => regexEdit(+el.dataset.i),
+  'rx-save': (el) => {
+    const i = +el.dataset.i;
+    const base = i === -1 ? normalizeScript({ findRegex: '' }) : S.regex[i];
+    const r = normalizeScript({
+      ...base,
+      scriptName: $('#rx-name').value.trim() || 'Regex',
+      findRegex: $('#rx-find').value,
+      replaceString: $('#rx-replace').value,
+      trimStrings: $('#rx-trim').value.split('\n').filter((x) => x !== ''),
+      placement: [...document.querySelectorAll('[data-rx-place]')].filter((x) => x.checked).map((x) => +x.dataset.rxPlace),
+      markdownOnly: $('#rx-md').checked,
+      promptOnly: $('#rx-prompt').checked,
+      runOnEdit: $('#rx-edit').checked,
+      minDepth: numOrNull($('#rx-min').value),
+      maxDepth: numOrNull($('#rx-max').value),
+    });
+    if (i === -1) S.regex.push(r); else S.regex[i] = r;
+    saveRegex(); closeSheet(); rerenderSettings();
+  },
+  'rx-delete': (el) => {
+    if (!confirm('Delete this regex script?')) return;
+    S.regex.splice(+el.dataset.i, 1);
+    saveRegex(); closeSheet(); rerenderSettings();
+  },
+  'rx-export': async (el) => {
+    const r = S.regex[+el.dataset.i];
+    await saveFile(new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' }), `regex-${safeName(r.scriptName)}.json`);
+  },
+
   'browse-models': browseModels,
   'pick-model': (el) => {
     const conn = activeConn();
@@ -1096,6 +1661,7 @@ const actions = {
     if (!confirm('Delete ALL characters, chats and settings on this device?')) return;
     if (!confirm('Really? This cannot be undone.')) return;
     await db.clear('characters'); await db.clear('chats'); await db.clear('kv');
+    S.presets = []; S.lorebooks = []; S.regex = [];
     S.settings = defaultSettings();
     await saveSettings(true);
     go('#/');
@@ -1137,6 +1703,19 @@ document.addEventListener('input', (e) => {
     }, 200);
   } else if (el.dataset.input === 'model-search') {
     renderModelList(el.value);
+  } else if (el.dataset.input === 'pm-search' || el.dataset.input === 'lb-search') {
+    const key = el.dataset.input === 'pm-search' ? 'pmQuery' : 'lbQuery';
+    S[key] = el.value;
+    clearTimeout(S.searchTimer);
+    S.searchTimer = setTimeout(() => {
+      if (key === 'pmQuery') renderPresetView(S.pmId); else renderLorebookView(S.lbId);
+      const sEl = $('.search');
+      if (sEl) { sEl.focus(); sEl.setSelectionRange(sEl.value.length, sEl.value.length); }
+    }, 200);
+  } else if ('lbName' in el.dataset) {
+    const b = bookById(S.lbId);
+    b.name = el.value;
+    saveLorebooks();
   }
 });
 
@@ -1149,6 +1728,38 @@ document.addEventListener('change', (e) => {
     return;
   }
   if ('num' in el.dataset && el.dataset.bind) el.value = getPath(el.dataset.bind);
+  if (el.dataset.pmToggle !== undefined) {
+    const p = presetById(S.pmId);
+    p.order[+el.dataset.pmToggle].enabled = el.checked;
+    el.closest('.pm-row').classList.toggle('off', !el.checked);
+    savePresets();
+    return;
+  }
+  if (el.dataset.leToggle !== undefined) {
+    const b = bookById(S.lbId);
+    b.entries[+el.dataset.leToggle].enabled = el.checked;
+    el.closest('.pm-row').classList.toggle('off', !el.checked);
+    saveLorebooks();
+    return;
+  }
+  if (el.dataset.lbGlobal) {
+    bookById(el.dataset.lbGlobal).global = el.checked;
+    saveLorebooks();
+    return;
+  }
+  if (el.dataset.rxToggle !== undefined) {
+    S.regex[+el.dataset.rxToggle].disabled = !el.checked;
+    saveRegex();
+    return;
+  }
+  if (el.dataset.personaBook) {
+    const per = activePersona();
+    const set = new Set(per.lorebooks || []);
+    if (el.checked) set.add(el.dataset.personaBook); else set.delete(el.dataset.personaBook);
+    per.lorebooks = [...set];
+    saveSettings();
+    return;
+  }
   const c = el.dataset.change;
   if (c === 'select-conn') {
     if (el.value === '__new') newConnection();
@@ -1161,6 +1772,10 @@ document.addEventListener('change', (e) => {
     conn.provider = el.value;
     if (!conn.name || conn.name === oldLabel || conn.name === 'OpenRouter') conn.name = PROVIDERS[el.value].label;
     conn.model = '';
+    saveSettings();
+    rerenderSettings();
+  } else if (c === 'select-preset') {
+    S.settings.activePreset = el.value || null;
     saveSettings();
     rerenderSettings();
   } else if (c === 'select-persona') {
@@ -1193,6 +1808,7 @@ const ICONS = {
   trash: svg('<path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>', 'width="18" height="18"'),
   refresh: svg('<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.8-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>', 'width="18" height="18"'),
   branch: svg('<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/>', 'width="18" height="18"'),
+  sliders: svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
   close: svg('<path d="M18 6L6 18M6 6l12 12"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
 };
@@ -1211,6 +1827,9 @@ async function boot() {
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
   if (!settings) await saveSettings(true);
+  for (const key of ['presets', 'lorebooks', 'regex']) {
+    try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
+  }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   await render();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

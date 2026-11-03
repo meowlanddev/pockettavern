@@ -128,6 +128,9 @@ function openaiBody(conn, preset, messages) {
   if (preset.top_k > 0) body.top_k = preset.top_k;
   if (preset.min_p > 0) body.min_p = preset.min_p;
   if (preset.repetition_penalty && preset.repetition_penalty !== 1) body.repetition_penalty = preset.repetition_penalty;
+  if (conn.provider === 'openrouter' && ['low', 'medium', 'high'].includes(preset.claude_effort)) {
+    body.reasoning = { effort: preset.claude_effort };
+  }
   return body;
 }
 
@@ -142,7 +145,7 @@ export function toAnthropic(messages) {
     let role = m.role;
     let content = m.content;
     if (!content) continue;
-    if (role === 'system') { role = 'user'; content = `[System note: ${content}]`; }
+    if (role === 'system') role = 'user'; // like SillyTavern: later system prompts become user turns
     const last = out[out.length - 1];
     if (last && last.role === role) last.content += '\n\n' + content;
     else out.push({ role, content });

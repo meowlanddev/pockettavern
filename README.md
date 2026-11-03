@@ -6,12 +6,21 @@ requests go straight from your phone to the AI provider.
 
 ## Features
 - Import SillyTavern / TavernAI character cards (PNG or JSON, V1/V2/V3) and export them back as PNG cards
-- Character editor with alternate greetings, system prompt and post-history overrides
-- Streaming chat, swipes (alternate replies), edit/delete/branch messages, multiple chats per character
-- Embedded lorebooks (character_book) activated by keywords
-- Macros: `{{char}}`, `{{user}}`, `{{time}}`, `{{date}}`, `{{random:a,b}}`, `{{roll:1d20}}`
+- **SillyTavern chat-completion presets**: full prompt manager with on/off toggles, prompt editing and reordering,
+  in-chat injections at depth, card system-prompt overrides, generation settings; export back to ST format
+- **Lorebooks / World Info**: import ST lorebooks; global, per-persona and per-character lorebooks; embedded card lorebooks;
+  keywords and regex keys, secondary-key logic, recursion, inclusion groups with priority, character filters,
+  probability, all insertion positions (before/after character, @depth with role, examples, outlets)
+- **Regex scripts**: ST format; user input / AI output / world info; display-only, prompt-only and permanent; depth limits;
+  card-embedded scripts
+- **Macros**: `{{char}}`, `{{user}}`, `{{setvar}}`/`{{getvar}}` (+ add/inc/dec, global vars), `{{random::a::b}}`, `{{roll:1d20}}`,
+  `{{trim}}`, `{{// comments}}`, `{{mesExamplesRaw}}`, `{{lastMessage}}`, time/date and more
+- Model output can contain HTML/CSS (info boards, cards); it is sanitized (DOMPurify) and rendered in a shadow root
+- Streaming chat, swipes, edit/delete/branch messages, multiple chats per character, personas
 - Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API)
-- Personas, sampler settings, prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
+- Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
+
+Not (yet) supported: group chats, Author's Note UI, timed lorebook effects (sticky/cooldown/delay), STscript/quick replies, extensions.
 
 ## Install on iPhone
 Open the site in Safari → Share → **Add to Home Screen**.

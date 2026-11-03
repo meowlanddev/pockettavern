@@ -1,9 +1,10 @@
 // Service worker: makes the app installable and usable offline.
 // Network-first for app files, so updates show up on the next launch.
-const CACHE = 'pockettavern-v1';
+const CACHE = 'pockettavern-v2';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/card.js', './js/prompt.js', './js/api.js',
+  './js/macros.js', './js/worldinfo.js', './js/regex.js', './js/preset.js', './js/render.js', './js/vendor/purify.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 

@@ -289,3 +289,24 @@ h4.sub { margin: 20px 0 4px; font-size: .85rem; color: var(--accent); text-trans
   overflow-wrap: anywhere;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+
+/* ---------- lists: prompt manager, lorebooks, regex ---------- */
+.pm-list { display: flex; flex-direction: column; margin: 4px 0 12px; }
+.pm-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.pm-row.off .pm-title { color: var(--muted); }
+.pm-row.hdr .pm-title { font-weight: 700; color: var(--accent); font-size: .85rem; letter-spacing: .02em; }
+.pm-name { flex: 1; min-width: 0; text-align: left; padding: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pm-title { overflow-wrap: anywhere; }
+.badge { font-size: .7rem; padding: 1px 7px; border-radius: 8px; background: var(--bg3); color: var(--muted); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.badge.slot { color: var(--accent); }
+.badge.muted { opacity: .7; }
+.toggle.mini { margin: 0; flex-shrink: 0; }
+.toggle.mini i { width: 42px; height: 26px; }
+.toggle.mini i::after { width: 20px; height: 20px; }
+.toggle.mini input:checked + i::after { transform: translateX(16px); }
+.list-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.lr-btn { text-align: left; display: flex; flex-direction: column; min-width: 0; padding: 4px 0; }
+.lr-title { font-weight: 600; overflow-wrap: anywhere; }
+.check { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: .92rem; }
+.check input { width: 20px; height: 20px; accent-color: var(--accent); flex-shrink: 0; }
+.sheet .field input, .sheet .field textarea, .sheet .field select { background: var(--bg); }
