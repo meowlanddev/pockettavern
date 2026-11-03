@@ -21,10 +21,13 @@ requests go straight from your phone to the AI provider.
 - **Group chats**: natural / list / manual reply order, talkativeness, mentions, swap or join cards, muting, "make X speak"
 - **Reasoning display**: collapsible thought process from reasoning models (OpenRouter, Claude 4.6+)
 - Quick preset switcher inside chats
+- **Built-in extensions**: ✨ Enhance My Reply (port of [Enhanced-Replies](https://github.com/setsuna1313/Enhanced-Replies)) and Summarize
+- **Quick Replies** (import ST quick reply sets) and a practical subset of **STscript** slash commands
+- Lorebook **timed effects**: sticky, cooldown, delay
 - Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API)
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 
-Not (yet) supported: timed lorebook effects (sticky/cooldown/delay), STscript/quick replies, extensions.
+Not supported: arbitrary third-party ST extensions (they run inside SillyTavern itself; popular ones are rebuilt as built-ins), STscript closures and /if-style control flow.
 
 ## Install on iPhone
 Open the site in Safari → Share → **Add to Home Screen**.

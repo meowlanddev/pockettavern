@@ -20,9 +20,9 @@ export function collectLoreEntries({ char, persona, lorebooks }) {
     if (b.global || charIds.has(b.id) || personaIds.has(b.id) || (linkedName && b.name.trim().toLowerCase() === linkedName)) books.set(b.id, b);
   }
   const entries = [];
-  for (const b of books.values()) entries.push(...b.entries);
+  for (const b of books.values()) entries.push(...b.entries.map((e) => ({ ...e, _key: `${b.id}:${e.uid}` })));
   if (char.character_book && char.character_book.entries && !char.disableEmbeddedBook) {
-    entries.push(...(char._embeddedEntries || []));
+    entries.push(...(char._embeddedEntries || []).map((e) => ({ ...e, _key: e._key || `card:${char.id}:${e.uid}` })));
   }
   return { entries, books: [...books.values()] };
 }
@@ -37,10 +37,13 @@ function formatExamples(raw, heading) {
  * Build the message list for a generation.
  * history: messages before the one being generated (oldest first)
  * mode: 'normal' | 'continue' (history ends with the message being continued) | 'impersonate'
+ *       | 'quiet' (background generation with quietPrompt, like ST's generateQuietPrompt)
+ * summary: { text, position: 'top'|'depth'|'macro', depth, role, template }
+ * timed: lorebook sticky/cooldown state for this chat (mutated)
  * group: { names: 'A, B', nameOf(msg) } for group chats (names are prefixed to history, nudge added)
  * Returns { messages, stats, vars }
  */
-export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null }) {
+export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null }) {
   const P = settings.prompt;
   const samplers = settings.preset;
   const pr = preset || simplePreset(P);
@@ -73,12 +76,13 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     globals: settings.globalVars || (settings.globalVars = {}),
     outlets: {},
     group: group ? group.names : undefined,
+    summary: (summary && summary.text) || '',
   };
   const macro = (t) => evaluateMacros(t, env);
 
   // ---- lorebooks
   const { entries } = collectLoreEntries({ char: charWithBook, persona, lorebooks });
-  const wi = activateWorldInfo({ entries, history: texts, char, persona, defaultDepth: P.wi_scan_depth || 4 });
+  const wi = activateWorldInfo({ entries, history: texts, char, persona, defaultDepth: P.wi_scan_depth || 4, timed, chatLength: history.length });
   const wiText = (list) => list.map((e) => applyRegex(macro(e.content), scripts, { placement: PLACEMENT.WORLD_INFO, isPrompt: true, macro }).trim()).filter(Boolean).join('\n');
   for (const [name, list] of Object.entries(wi.outlets)) env.outlets[name] = wiText(list);
   const wrapWi = (s) => (s ? (pr.formats.wi_format || '{0}').replace('{0}', s) : '');
@@ -86,6 +90,7 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
   // ---- walk the prompt order
   const byId = new Map(pr.prompts.map((p) => [p.identifier, p]));
   const blocks = []; // {role, content} | {history:true}
+  let mainAt = -1;
   const injections = []; // {depth, order, role, content}
   let hasHistory = false;
 
@@ -135,9 +140,19 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
         }
         content = macro(p.content || '');
     }
-    if (content && content.trim()) blocks.push({ role, content: content.trim() });
+    if (content && content.trim()) {
+      blocks.push({ role, content: content.trim() });
+      if (p.identifier === 'main') mainAt = blocks.length - 1;
+    }
   }
   if (!hasHistory) blocks.push({ history: true });
+
+  // Summary (Summarize extension)
+  if (summary && summary.text && summary.text.trim() && summary.position !== 'macro') {
+    const content = macro((summary.template || '[Summary: {{summary}}]').replace(/\{\{summary\}\}/gi, summary.text.trim()));
+    if (summary.position === 'depth') injections.push({ depth: Number(summary.depth) || 0, order: 50, role: summary.role || 'system', content });
+    else blocks.splice(mainAt + 1, 0, { role: 'system', content });
+  }
 
   // lorebook entries placed in the chat
   for (const e of wi.depth) {
@@ -167,7 +182,7 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     const depth = history.length - 1 - i;
     let text = applyRegex(msgText(m), scripts, { placement: m.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, isPrompt: true, depth, macro });
     // In group chats, {{char}} inside a message means the member who wrote it.
-    const author = group && group.nameOf ? group.nameOf(m) : null;
+    const author = group && group.nameOf && m.role !== 'system' ? group.nameOf(m) : null;
     if (author && m.role !== 'user') {
       const speaking = env.char;
       env.char = author;
@@ -179,7 +194,7 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     const t = estTokens(text) + 4;
     if (used + t > budget && hist.length) break;
     used += t;
-    hist.unshift({ role: m.role === 'user' ? 'user' : 'assistant', content: text });
+    hist.unshift({ role: m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant', content: text });
   }
   // in-chat injections (depth 0 = after the last message)
   const byDepth = new Map();
@@ -208,11 +223,13 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
   const pick = (key, def) => pr[key] || (pr.raw && pr.raw[key]) || def;
   if (mode === 'continue') messages.push({ role: 'system', content: macro(pick('continue_nudge_prompt', DEFAULT_CONTINUE)) });
   else if (mode === 'impersonate') messages.push({ role: 'system', content: macro(pick('impersonation_prompt', DEFAULT_IMPERSONATE)) });
+  else if (mode === 'quiet') messages.push({ role: 'system', content: macro(quietPrompt) });
   else if (group) messages.push({ role: 'system', content: macro(pick('group_nudge_prompt', DEFAULT_GROUP_NUDGE)) });
 
   return {
     messages: messages.filter((m) => m.content && m.content.trim()),
     vars: env.vars,
+    timed,
     stats: {
       system: fixed,
       history: used,

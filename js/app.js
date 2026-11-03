@@ -7,8 +7,10 @@ import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './w
 import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
 import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
 import { formatMessage, renderInto } from './render.js';
+import { runScript } from './stscript.js';
+import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -29,6 +31,7 @@ function defaultSettings() {
     personas: [{ id: pid, name: 'User', description: '', avatar: null }],
     activePersona: pid,
     ui: { enterSends: false, fontSize: 16 },
+    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS } },
   };
 }
 
@@ -50,6 +53,7 @@ const S = {
   groups: [],
   group: null, // active group (group chats)
   members: new Map(), // id -> character, for the active group
+  qr: [], // quick reply sets
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -93,6 +97,7 @@ const savePresets = (now) => saveKv('presets', now);
 const saveLorebooks = (now) => saveKv('lorebooks', now);
 const saveRegex = (now) => saveKv('regex', now);
 const saveGroups = (now) => saveKv('groups', now);
+const saveQr = (now) => saveKv('qr', now);
 
 const cardScriptCache = new WeakMap();
 function scriptsFor(char) {
@@ -130,8 +135,207 @@ function promptFor(chat, char, history, opts = {}) {
     char, persona: activePersona(), settings: S.settings, chat, history,
     preset: activePreset(), lorebooks: S.lorebooks, regexScripts: scriptsFor(char),
     model: conn && conn.model, embeddedEntries: char._embedded || embeddedEntries(char),
-    mode: opts.mode || 'normal', group,
+    mode: opts.mode || 'normal', group, quietPrompt: opts.quietPrompt || '',
+    summary: summaryFor(chat), timed: structuredClone(chat.wiTimed || {}),
   });
+}
+
+function summaryFor(chat) {
+  const cfg = S.settings.ext.summarize;
+  if (!chat.summary || !chat.summary.text) return null;
+  return { text: chat.summary.text, position: cfg.enabled ? cfg.position : 'macro', depth: cfg.depth, role: cfg.role, template: cfg.template };
+}
+
+/** Background generation with the full chat context (SillyTavern's generateQuietPrompt). */
+async function quietGenerate(quietPrompt, { onToken, maxTokens, signal, chat = S.chat } = {}) {
+  const conn = activeConn();
+  if (!conn || !conn.model) throw new Error('Set up an API connection first (Settings → Connection).');
+  let speaker = S.char;
+  if (S.group && chat.groupId === S.group.id) {
+    const lastChar = [...chat.messages].reverse().find((m) => m.role === 'assistant');
+    speaker = S.members.get(lastChar && lastChar.charId) || activeMembers()[0] || S.char;
+  }
+  const { messages } = promptFor({ ...chat, vars: { ...(chat.vars || {}) } }, cardForSpeaker(speaker), chat.messages.slice(), { mode: 'quiet', quietPrompt });
+  const preset = { ...S.settings.preset, stream: !!onToken && S.settings.preset.stream };
+  if (maxTokens) preset.max_tokens = maxTokens;
+  return generate(conn, preset, messages, { signal, onToken });
+}
+
+// ---------- Enhance My Reply ----------
+async function enhanceDraft() {
+  if (S.generating) return;
+  const input = $('#input');
+  const draft = input && input.value.trim();
+  if (!draft) { toast('Write a draft before enhancing it.'); input && input.focus(); return; }
+  const chat = S.chat;
+  S.generating = chat.id;
+  S.abort = new AbortController();
+  updateSendButton();
+  const btn = $('#enh-btn');
+  if (btn) btn.classList.add('busy');
+  try {
+    const out = normalizeGeneratedText(await quietGenerate(buildEnhancementPrompt(draft, S.settings.ext.enhance), { signal: S.abort.signal }));
+    if (!out) throw new Error('The model returned an empty reply.');
+    S.enhanceOriginal = { chatId: chat.id, text: draft };
+    if (S.chat === chat) { input.value = out; chat.draftInput = out; autosize(input); updateEnhanceButton(); }
+    toast('Reply enhanced. Restore the original from ✨ if you want it back.', 4000);
+  } catch (e) {
+    if (e.name !== 'AbortError') toast(e.message || 'Could not enhance the reply.', 6000);
+  } finally {
+    S.generating = null;
+    S.abort = null;
+    if (btn) btn.classList.remove('busy');
+    updateSendButton();
+  }
+}
+
+function restoreDraft() {
+  const o = S.enhanceOriginal;
+  if (!o || o.chatId !== S.chat.id) return toast('No enhanced draft to restore.');
+  const input = $('#input');
+  input.value = o.text;
+  S.chat.draftInput = o.text;
+  S.enhanceOriginal = null;
+  autosize(input);
+  updateEnhanceButton();
+  toast('Original draft restored.');
+}
+
+function updateEnhanceButton() {
+  const b = $('#enh-btn');
+  const input = $('#input');
+  if (b && input) b.hidden = !S.settings.ext.enhance.enabled || !input.value.trim();
+}
+
+// ---------- Summarize ----------
+async function summarizeChat(chat = S.chat, { silent = false } = {}) {
+  if (S.summarizing) return;
+  const cfg = S.settings.ext.summarize;
+  if (!chat.messages.length) return;
+  S.summarizing = true;
+  if (!silent) toast('Summarizing…', 20000);
+  try {
+    const prompt = (cfg.prompt || '').replace(/\{\{words\}\}/gi, String(cfg.words || 200));
+    const text = normalizeGeneratedText(await quietGenerate(prompt, { chat, maxTokens: Math.max(300, Math.round((cfg.words || 200) * 2.5)) }));
+    if (!text) throw new Error('The model returned an empty summary.');
+    chat.summary = { text, upTo: chat.messages.length, at: Date.now() };
+    await saveChat(chat);
+    toast('Summary updated', 2500);
+    const box = $('#summary-text');
+    if (box) box.value = text;
+  } catch (e) {
+    toast('Summary failed: ' + (e.message || e), 6000);
+  } finally {
+    S.summarizing = false;
+  }
+}
+
+function maybeSummarize(chat) {
+  const cfg = S.settings.ext.summarize;
+  if (!cfg.enabled || !cfg.every) return;
+  const since = chat.messages.length - ((chat.summary && chat.summary.upTo) || 0);
+  if (since >= cfg.every) summarizeChat(chat, { silent: true });
+}
+
+function summarySheet() {
+  const cfg = S.settings.ext.summarize;
+  const sm = S.chat.summary;
+  openSheet(`
+    <div class="sheet-title">Summary</div>
+    <p class="hint">${cfg.enabled ? `Updates automatically every ${cfg.every} messages${sm && sm.upTo ? ` (last at message ${sm.upTo})` : ''}.` : 'Summarize is off in Settings → Extensions, so this summary only reaches the AI through a {{summary}} macro in your preset.'}</p>
+    <label class="field"><textarea id="summary-text" rows="9" placeholder="No summary yet.">${esc(sm ? sm.text : '')}</textarea></label>
+    <div class="row wrap">
+      <button class="btn" data-action="summary-now">Summarize now</button>
+      <button class="btn primary" data-action="summary-save">Save</button>
+    </div>`);
+}
+
+// ---------- Quick Replies & slash commands ----------
+function qrBarHtml() {
+  const btns = S.qr.filter((set) => set.visible !== false).flatMap((set) => set.buttons.map((b) => ({ ...b, setId: set.id })));
+  if (!btns.length) return '';
+  return `<div class="qr-bar">${btns.map((b) => `<button data-action="qr-run" data-set="${b.setId}" data-id="${b.id}" title="${esc(b.title || b.message)}">${esc(b.label || '…')}</button>`).join('')}</div>`;
+}
+
+function memberByName(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return null;
+  return groupMembers().find((c) => c.name.toLowerCase() === n) || groupMembers().find((c) => c.name.toLowerCase().startsWith(n)) || null;
+}
+
+function scriptApi(chat) {
+  const persist = () => { saveChat(chat); saveSettings(); };
+  const push = async (msg) => { chat.messages.push({ id: db.uid(), swipeIdx: 0, ts: Date.now(), ...msg }); await saveChat(chat); if (S.chat === chat) renderMessages(true); };
+  const lastSpeakerId = () => { const l = [...chat.messages].reverse().find((m) => m.role === 'assistant'); return l && l.charId; };
+  return {
+    macro: (t) => evaluateMacros(t, { char: (S.group ? (S.members.get(lastSpeakerId()) || S.char) : S.char).name, user: activePersona().name, group: S.group ? groupMembers().map((c) => c.name).join(', ') : undefined, vars: chat.vars || (chat.vars = {}), globals: S.settings.globalVars || (S.settings.globalVars = {}), summary: (chat.summary && chat.summary.text) || '' }),
+    vars: () => chat.vars || (chat.vars = {}),
+    globals: () => S.settings.globalVars || (S.settings.globalVars = {}),
+    save: persist,
+    send: (text) => push({ role: 'user', swipes: [text] }),
+    sendAs: (name, text) => {
+      if (S.group) {
+        const c = memberByName(name) || S.members.get(lastSpeakerId()) || groupMembers()[0];
+        return push({ role: 'assistant', swipes: [text], charId: c.id, name: c.name });
+      }
+      return push({ role: 'assistant', swipes: [text] });
+    },
+    sys: (text) => push({ role: 'system', swipes: [text], name: 'Narrator' }),
+    trigger: async (name) => {
+      if (S.group && chat.groupId === S.group.id) {
+        const c = memberByName(name);
+        if (c) await runGeneration('new', c.id); else await runGroupTurn('');
+      } else await runGeneration('new');
+    },
+    gen: async (prompt) => normalizeGeneratedText(await quietGenerate(prompt, { chat })),
+    genraw: async (prompt) => {
+      const conn = activeConn();
+      if (!conn || !conn.model) throw new Error('Set up an API connection first.');
+      return normalizeGeneratedText(await generate(conn, { ...S.settings.preset, stream: false }, [{ role: 'user', content: prompt }]));
+    },
+    impersonate: () => runImpersonate(),
+    cont: () => runGeneration('continue', lastSpeakerId()),
+    regen: () => runGeneration('swipe', lastSpeakerId()),
+    setInput: (t) => { const i = $('#input'); if (i) { i.value = t; chat.draftInput = t; autosize(i); updateEnhanceButton(); } },
+    input: async (p, def) => window.prompt(p || 'Input', def) ?? '',
+    popup: async (t) => window.alert(t),
+    echo: (t) => toast(t, 4000),
+    preset: (name) => {
+      const p = S.presets.find((x) => x.name.toLowerCase() === String(name).trim().toLowerCase());
+      if (!p && String(name).trim().toLowerCase() !== 'simple') throw new Error(`No preset named "${name}"`);
+      S.settings.activePreset = p ? p.id : null;
+      if (p) applyPresetSamplers(p);
+      saveSettings();
+    },
+    persona: (name) => {
+      const p = S.settings.personas.find((x) => x.name.toLowerCase() === String(name).trim().toLowerCase());
+      if (!p) throw new Error(`No persona named "${name}"`);
+      S.settings.activePersona = p.id;
+      saveSettings();
+      if (S.chat === chat) renderMessages();
+    },
+  };
+}
+
+async function runSlash(src) {
+  const chat = S.chat;
+  try {
+    await runScript(src, scriptApi(chat));
+  } catch (e) {
+    toast(e.message || String(e), 6000);
+  }
+}
+
+async function runQuickReply(setId, id) {
+  const set = S.qr.find((x) => x.id === setId);
+  const b = set && set.buttons.find((x) => x.id === id);
+  if (!b || !b.message) return;
+  if (S.generating) return toast('Wait for the current reply (or tap stop).');
+  const text = b.message.trim();
+  if (text.startsWith('/')) return runSlash(text);
+  const input = $('#input');
+  input.value = scriptApi(S.chat).macro(text);
+  return sendMessage();
 }
 
 // ---------- group helpers ----------
@@ -141,6 +345,7 @@ const activeMembers = () => groupMembers().filter((c) => !(S.group.muted || []).
 /** The character who wrote an assistant message (or null for user messages). */
 function speakerOf(msg) {
   if (msg.role === 'user') return null;
+  if (msg.role === 'system') return { id: 'narrator', name: msg.name || 'Narrator', avatar: null };
   if (S.group) return S.members.get(msg.charId) || { id: msg.charId, name: msg.name || '?', avatar: null };
   return S.char;
 }
@@ -283,13 +488,14 @@ async function render() {
   S.openActions = null;
   S.editing = null;
   document.documentElement.style.setProperty('--font', `${S.settings.ui.fontSize || 16}px`);
-  if (r.name !== 'preset' && r.name !== 'lorebook') app.dataset.view = '';
+  if (r.name !== 'preset' && r.name !== 'lorebook' && r.name !== 'qr') app.dataset.view = '';
   if (r.name !== 'group') S.groupDraft = null;
   try {
     if (r.name === 'chat' && r.a) await renderChatView(r.a, r.b);
     else if (r.name === 'edit' && r.a) await renderEditView(r.a);
     else if (r.name === 'preset' && r.a) renderPresetView(r.a);
     else if (r.name === 'group' && r.a) await renderGroupEditor(r.a);
+    else if (r.name === 'qr' && r.a) renderQrView(r.a);
     else if (r.name === 'lorebook' && r.a) renderLorebookView(r.a);
     else if (r.name === 'settings') renderSettingsView(r.a);
     else await renderHome();
@@ -380,6 +586,11 @@ async function importFiles() {
           done.regex += list.length;
           continue;
         }
+        if (Array.isArray(json.qrList)) {
+          S.qr.push({ id: db.uid(), name: json.name || base, visible: true, buttons: json.qrList.map((q) => ({ id: db.uid(), label: String(q.label || q.title || 'QR'), title: String(q.title || ''), message: String(q.message || '') })) });
+          done.qr = (done.qr || 0) + 1;
+          continue;
+        }
         if (json.entries && !json.spec && !json.first_mes) {
           const b = normalizeBook(json, base);
           const book = { id: db.uid(), name: base || b.name, global: false, scanDepth: b.scanDepth, entries: b.entries };
@@ -402,11 +613,13 @@ async function importFiles() {
   if (done.presets) await savePresets(true);
   if (done.books) await saveLorebooks(true);
   if (done.regex) await saveRegex(true);
+  if (done.qr) await saveQr(true);
   const parts = [];
   if (done.chars) parts.push(`${done.chars} character${done.chars > 1 ? 's' : ''}`);
   if (done.presets) parts.push(`${done.presets} preset${done.presets > 1 ? 's' : ''}`);
   if (done.books) parts.push(`${done.books} lorebook${done.books > 1 ? 's' : ''}`);
   if (done.regex) parts.push(`${done.regex} regex script${done.regex > 1 ? 's' : ''}`);
+  if (done.qr) parts.push(`${done.qr} quick reply set${done.qr > 1 ? 's' : ''}`);
   if (!parts.length) return;
   if (lastPreset && confirm(`Use preset "${lastPreset.name}" now?\n\nThis also applies its generation settings (max tokens, context size, temperature…).`)) {
     S.settings.activePreset = lastPreset.id;
@@ -576,15 +789,18 @@ async function renderChatView(charId, chatId) {
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
     </header>
     <main class="scroll messages" id="msgs"></main>
+    ${qrBarHtml()}
     <footer class="composer">
       <button class="qa-btn" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button>
       <textarea id="input" rows="1" placeholder="Message ${esc(char.name)}" enterkeyhint="${S.settings.ui.enterSends ? 'send' : 'enter'}"></textarea>
+      <button class="enh-btn" id="enh-btn" data-action="enhance" aria-label="Enhance reply" title="Enhance reply" hidden>✨</button>
       <button class="send-btn" id="send" data-action="send" aria-label="Send">${ICONS.send}</button>
     </footer>`;
   const input = $('#input');
   input.value = S.chat.draftInput || '';
   autosize(input);
-  input.addEventListener('input', () => { autosize(input); S.chat.draftInput = input.value; });
+  input.addEventListener('input', () => { autosize(input); S.chat.draftInput = input.value; updateEnhanceButton(); });
+  updateEnhanceButton();
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (S.settings.ui.enterSends || !isTouch)) {
       e.preventDefault();
@@ -623,7 +839,7 @@ function msgHtml(msg, isLast) {
     body = raw ? `<div class="text" data-mid="${msg.id}"></div>`
       : `<div class="text">${generatingThis ? '<span class="typing"><i></i><i></i><i></i></span>' : '<span class="muted">(empty)</span>'}</div>`;
   }
-  const swipes = (!isUser && isLast && !editing && (n > 1 || !msg.greeting))
+  const swipes = (msg.role === 'assistant' && isLast && !editing && (n > 1 || !msg.greeting))
     ? `<div class="swipes">
         <button class="sw-btn" data-action="swipe" data-dir="-1" ${msg.swipeIdx === 0 || generatingThis ? 'disabled' : ''} aria-label="Previous swipe">${ICONS.left}</button>
         <span>${msg.swipeIdx + 1}/${n}</span>
@@ -637,7 +853,7 @@ function msgHtml(msg, isLast) {
       <button data-action="msg-branch" data-id="${msg.id}">${ICONS.branch}<span>Branch</span></button>
       <button class="danger" data-action="msg-delete" data-id="${msg.id}">${ICONS.trash}<span>Delete</span></button>
     </div>` : '';
-  return `<div class="msg ${isUser ? 'user' : 'char'}" data-id="${msg.id}">
+  return `<div class="msg ${isUser ? 'user' : msg.role === 'system' ? 'sys' : 'char'}" data-id="${msg.id}">
       ${avatarHtml(avatar, name, 'av sm')}
       <div class="bubble" data-action="toggle-msg" data-id="${msg.id}">
         <div class="name">${esc(name)}</div>
@@ -726,6 +942,13 @@ async function sendMessage() {
   const input = $('#input');
   const text = input.value.trim();
   const chat = S.chat;
+  if (text.startsWith('/') && /^\/[a-z#]/i.test(text)) {
+    input.value = '';
+    chat.draftInput = '';
+    autosize(input);
+    updateEnhanceButton();
+    return runSlash(text);
+  }
   if (text) {
     const env = { char: S.char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
     const finalText = applyRegex(text, scriptsFor(S.char), { placement: PLACEMENT.USER, macro: (t) => evaluateMacros(t, env) });
@@ -733,6 +956,7 @@ async function sendMessage() {
     input.value = '';
     chat.draftInput = '';
     autosize(input);
+    updateEnhanceButton();
     await saveChat(chat);
     renderMessages(true);
   } else if (!chat.messages.length && !S.group) {
@@ -782,8 +1006,9 @@ async function runGeneration(mode, speakerId) {
   const original = mode === 'continue' ? (msg.swipes[idx] || '') : '';
   const postfix = mode === 'continue' && original && !/\s$/.test(original) ? continuePostfix() : '';
   const history = mode === 'continue' ? chat.messages.slice() : chat.messages.slice(0, chat.messages.indexOf(msg));
-  const { messages, vars } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal' });
+  const { messages, vars, timed } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal' });
   chat.vars = vars;
+  chat.wiTimed = timed;
   const prevReasoning = msg.reasoning[idx] || '';
   S.generating = chat.id;
   S.abort = new AbortController();
@@ -835,6 +1060,8 @@ async function runGeneration(mode, speakerId) {
     console.error(failed);
     toast(failed.message || String(failed), 8000);
     S.stopGroup = true;
+  } else if (msg.swipes[idx] && msg.swipes[idx].trim()) {
+    maybeSummarize(chat);
   }
 }
 
@@ -960,6 +1187,9 @@ function quickActions() {
       <button data-action="qa-impersonate">${ICONS.user}<span>Impersonate</span></button>
       <button data-action="qa-regen" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.refresh}<span>Regenerate</span></button>
       <button data-action="qa-note">${ICONS.note}<span>Author's Note${note && note.text && note.text.trim() ? ' •' : ''}</span></button>
+      ${S.settings.ext.enhance.enabled ? `<button data-action="enhance">✨<span>Enhance draft</span></button>` : ''}
+      ${S.enhanceOriginal && S.enhanceOriginal.chatId === S.chat.id ? `<button data-action="restore-draft">${ICONS.back}<span>Restore draft</span></button>` : ''}
+      <button data-action="qa-summary">${ICONS.note}<span>Summary${S.chat.summary && S.chat.summary.text ? ' •' : ''}</span></button>
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
       ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
     </div>
@@ -1297,6 +1527,43 @@ function renderSettingsView(open) {
     </div>
     ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}`;
 
+  const en = S.settings.ext.enhance;
+  const sm = S.settings.ext.summarize;
+  const tog = (attr, key, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" ${attr}="${key}" ${on ? 'checked' : ''}><i></i></label>`;
+  const extBody = `
+    <h4 class="sub">✨ Enhance My Reply</h4>
+    ${tog('data-ext-enhance-toggle', 'enabled', en.enabled, 'Enabled', 'Shows ✨ next to the message box when you have a draft')}
+    <label class="field"><span class="label">Enhancement prompt</span><textarea data-ext-enhance="prompt" rows="6">${esc(en.prompt)}</textarea></label>
+    <button class="btn sm" data-action="enhance-reset">Reset prompt</button>
+    ${ENHANCE_TOGGLES.map(([k, label, hint]) => tog('data-ext-enhance-toggle', k, en[k], label, hint)).join('')}
+    <p class="hint">Uses the chat context plus your current connection, model, preset and generation settings. The result replaces your draft but isn't sent.</p>
+    <h4 class="sub">📝 Summarize</h4>
+    ${tog('data-ext-sum-toggle', 'enabled', sm.enabled, 'Enabled', 'Keeps a running summary of each chat and adds it to the prompt')}
+    <label class="field inline"><span class="label">Update every<span class="hint">messages</span></span><input inputmode="numeric" data-ext-sum="every" value="${sm.every}"></label>
+    <label class="field inline"><span class="label">Summary length<span class="hint">words</span></span><input inputmode="numeric" data-ext-sum="words" value="${sm.words}"></label>
+    <label class="field inline"><span class="label">Insert</span><select data-ext-sum-select="position">
+      ${[['top', 'At the top of the prompt'], ['depth', 'In chat @ depth'], ['macro', 'Only via {{summary}}']].map(([k, v]) => `<option value="${k}" ${sm.position === k ? 'selected' : ''}>${v}</option>`).join('')}
+    </select></label>
+    ${sm.position === 'depth' ? `<label class="field inline"><span class="label">Depth</span><input inputmode="numeric" data-ext-sum="depth" value="${sm.depth}"></label>` : ''}
+    <label class="field"><span class="label">Injection template</span><input data-ext-sum="template" value="${esc(sm.template)}"></label>
+    <label class="field"><span class="label">Summary prompt</span><textarea data-ext-sum="prompt" rows="5">${esc(sm.prompt)}</textarea></label>
+    <p class="hint">Edit or refresh a chat's summary from ✨ → Summary. Your preset can use it anywhere with {{summary}}.</p>
+    <p class="hint">Other SillyTavern extensions can't be installed directly (they run code inside SillyTavern itself), but popular ones can be rebuilt here — ask!</p>`;
+
+  const qrBody = `
+    ${S.qr.map((q) => `<div class="list-row">
+      <button class="grow lr-btn" data-action="go" data-to="#/qr/${q.id}">
+        <span class="lr-title">${esc(q.name)}</span>
+        <span class="hint">${q.buttons.length} button${q.buttons.length === 1 ? '' : 's'}</span>
+      </button>
+      <span class="hint">Show</span>
+      <label class="toggle mini"><input type="checkbox" data-qr-toggle="${q.id}" ${q.visible !== false ? 'checked' : ''}><i></i></label>
+    </div>`).join('') || '<p class="muted">No quick reply sets yet.</p>'}
+    <div class="row wrap">
+      <button class="btn" data-action="import-files">${ICONS.import} Import ST set</button>
+      <button class="btn" data-action="qr-new">${ICONS.plus} New set</button>
+    </div>`;
+
   const uiBody = `
     ${settingsField('Enter key sends', 'ui.enterSends', 'checkbox', '', 'Off: use the send button on phones')}
     ${settingsField('Font size', 'ui.fontSize')}`;
@@ -1321,6 +1588,8 @@ function renderSettingsView(open) {
       ${sec('persona', 'Persona (you)', personaBody)}
       ${sec('lorebooks', 'Lorebooks', lorebookBody)}
       ${sec('regex', 'Regex scripts', regexBody)}
+      ${sec('qr', 'Quick replies', qrBody)}
+      ${sec('ext', 'Extensions', extBody)}
       ${sec('prompt', 'Prompts (Simple preset)', promptBody)}
       ${sec('ui', 'Interface', uiBody)}
       ${sec('data', 'Data & backup', dataBody)}
@@ -1518,6 +1787,9 @@ function renderLorebookView(id) {
             e.group ? `<span class="badge">group: ${esc(e.group)}${e.groupOverride ? ' ★' : ''}</span>` : '',
             e.characterFilter && e.characterFilter.names.length ? `<span class="badge">${e.characterFilter.isExclude ? 'not ' : ''}${e.characterFilter.names.length} char</span>` : '',
             e.position === 4 ? `<span class="badge">@${e.depth}</span>` : '',
+            e.sticky ? `<span class="badge">sticky ${e.sticky}</span>` : '',
+            e.cooldown ? `<span class="badge">cooldown ${e.cooldown}</span>` : '',
+            e.delay ? `<span class="badge">delay ${e.delay}</span>` : '',
           ].join('');
           return `<div class="pm-row ${e.enabled ? '' : 'off'}">
             <label class="toggle mini"><input type="checkbox" data-le-toggle="${i}" ${e.enabled ? 'checked' : ''}><i></i></label>
@@ -1567,6 +1839,12 @@ function leEdit(i) {
     ${chk('le-case', e.caseSensitive, 'Case sensitive')}
     ${chk('le-persona', e.matchPersonaDescription, 'Also scan the persona description')}
     <div class="row wrap">
+      <label class="field grow"><span class="label">Sticky</span><input id="le-sticky" inputmode="numeric" value="${e.sticky || 0}"></label>
+      <label class="field grow"><span class="label">Cooldown</span><input id="le-cooldown" inputmode="numeric" value="${e.cooldown || 0}"></label>
+      <label class="field grow"><span class="label">Delay</span><input id="le-delay" inputmode="numeric" value="${e.delay || 0}"></label>
+    </div>
+    <p class="hint">Sticky: stays active for N more messages after triggering. Cooldown: can't trigger again for N messages. Delay: needs at least N messages in the chat.</p>
+    <div class="row wrap">
       <button class="btn danger" data-action="le-delete" data-i="${i}">${ICONS.trash} Delete entry</button>
     </div>
     <button class="btn primary block" data-action="le-save" data-i="${i}">Save</button>
@@ -1599,6 +1877,66 @@ function regexEdit(i) {
   `, 'tall');
 }
 
+function qrById(id) {
+  const q = S.qr.find((x) => x.id === id);
+  if (!q) throw new Error('Quick reply set not found');
+  return q;
+}
+
+function renderQrView(id) {
+  const set = qrById(id);
+  S.qrId = id;
+  const scroll = $('main.scroll')?.scrollTop || 0;
+  const wasSame = app.dataset.view === 'qr:' + id;
+  app.dataset.view = 'qr:' + id;
+  app.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn" data-action="go-back" aria-label="Back">${ICONS.back}</button>
+      <h1 class="title">Quick replies</h1>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-action="qr-add" aria-label="Add button">${ICONS.plus}</button>
+    </header>
+    <main class="scroll pad">
+      <label class="field"><span class="label">Set name</span><input data-qr-name value="${esc(set.name)}" autocomplete="off"></label>
+      <label class="toggle"><span><span class="label">Show in chats</span><span class="hint">Buttons appear above the message box</span></span>
+        <input type="checkbox" data-qr-visible ${set.visible !== false ? 'checked' : ''}><i></i></label>
+      <p class="hint">A button sends its text as your message. Text starting with <code>/</code> runs slash commands, e.g. <code>/gen Describe the room | /sendas name={{char}} {{pipe}}</code>. You can also type commands straight into the chat box.</p>
+      ${set.buttons.map((b) => `
+        <div class="qr-edit">
+          <div class="row">
+            <input class="grow" data-qr-label="${b.id}" value="${esc(b.label)}" placeholder="Button label" autocomplete="off">
+            <button class="icon-btn sm" data-action="qr-up" data-id="${b.id}" aria-label="Move up">↑</button>
+            <button class="icon-btn sm danger" data-action="qr-del" data-id="${b.id}" aria-label="Delete">${ICONS.trash}</button>
+          </div>
+          <textarea data-qr-message="${b.id}" rows="3" placeholder="Message or /command" spellcheck="false">${esc(b.message)}</textarea>
+        </div>`).join('') || '<p class="muted">No buttons yet.</p>'}
+      <div class="row wrap">
+        <button class="btn" data-action="qr-add">${ICONS.plus} Add button</button>
+        <button class="btn" data-action="qr-export">${ICONS.download} Export</button>
+        <button class="btn danger" data-action="qr-delete-set">${ICONS.trash} Delete set</button>
+      </div>
+      <details class="section"><summary>Supported slash commands</summary><div class="sec-body"><pre class="cmd-list">${esc(SLASH_HELP)}</pre></div></details>
+      <div class="bottom-space"></div>
+    </main>`;
+  if (wasSame) $('main.scroll').scrollTop = scroll;
+}
+
+const SLASH_HELP = `/send text            — send as you (no reply)
+/sendas name=Char text — post as a character
+/sys text             — narrator message
+/trigger [name]       — make the character (or a group member) reply
+/gen prompt           — generate with chat context → {{pipe}}
+/genraw prompt        — generate without chat context → {{pipe}}
+/impersonate, /continue, /regenerate
+/setinput text        — put text in the message box
+/input prompt         — ask for text → {{pipe}}
+/echo text, /popup text
+/setvar key=name value, /getvar name, /addvar key=name 1
+/incvar name, /decvar name, /flushvar name
+/setglobalvar key=name value, /getglobalvar name
+/preset name, /persona name, /delay ms, /pass text, /abort
+Chain commands with |  — {{pipe}} is the previous result.`;
+
 const numOrNull = (v) => (String(v).trim() === '' || Number.isNaN(Number(v)) ? null : Number(v));
 const splitList = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
 
@@ -1610,7 +1948,7 @@ async function exportBackup() {
   const data = {
     app: 'PocketTavern', version: 1, exportedAt: new Date().toISOString(),
     settings, characters: await db.getAll('characters'), chats: await db.getAll('chats'),
-    presets: S.presets, lorebooks: S.lorebooks, regex: S.regex, groups: S.groups,
+    presets: S.presets, lorebooks: S.lorebooks, regex: S.regex, groups: S.groups, qr: S.qr,
   };
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1645,8 +1983,8 @@ async function importBackup() {
       const ids = new Map(S[key].map((x, i) => [x.id, i]));
       for (const x of list) { if (ids.has(x.id)) S[key][ids.get(x.id)] = x; else S[key].push(x); }
     };
-    merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex); merge('groups', data.groups);
-    await savePresets(true); await saveLorebooks(true); await saveRegex(true); await saveGroups(true);
+    merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex); merge('groups', data.groups); merge('qr', data.qr);
+    await savePresets(true); await saveLorebooks(true); await saveRegex(true); await saveGroups(true); await saveQr(true);
     if (replaceSettings && data.settings) {
       const keep = new Map(S.settings.connections.map((c) => [c.id, c.apiKey]));
       S.settings = { ...defaultSettings(), ...data.settings };
@@ -1698,6 +2036,57 @@ const actions = {
   },
   'msg-regen': (el) => { if (!S.generating) { const m = findMsg(el.dataset.id); runGeneration('swipe', m && m.charId); } },
   'quick-actions': quickActions,
+  enhance: () => { closeSheet(); enhanceDraft(); },
+  'restore-draft': () => { closeSheet(); restoreDraft(); },
+  'qa-summary': summarySheet,
+  'summary-now': () => summarizeChat(S.chat),
+  'summary-save': async () => {
+    const text = $('#summary-text').value.trim();
+    S.chat.summary = text ? { ...(S.chat.summary || {}), text, upTo: (S.chat.summary && S.chat.summary.upTo) || S.chat.messages.length } : null;
+    await saveChat(S.chat);
+    closeSheet();
+    toast(text ? 'Summary saved' : 'Summary cleared');
+  },
+  'qr-run': (el) => runQuickReply(el.dataset.set, el.dataset.id),
+  'qr-new': () => {
+    const set = { id: db.uid(), name: 'Quick replies', visible: true, buttons: [] };
+    S.qr.push(set);
+    saveQr();
+    go(`#/qr/${set.id}`);
+  },
+  'qr-add': () => {
+    const set = qrById(S.qrId);
+    set.buttons.push({ id: db.uid(), label: '', message: '' });
+    saveQr();
+    renderQrView(set.id);
+    const last = [...document.querySelectorAll('[data-qr-label]')].pop();
+    if (last) last.focus();
+  },
+  'qr-del': (el) => {
+    const set = qrById(S.qrId);
+    set.buttons = set.buttons.filter((b) => b.id !== el.dataset.id);
+    saveQr();
+    renderQrView(set.id);
+  },
+  'qr-up': (el) => {
+    const set = qrById(S.qrId);
+    const i = set.buttons.findIndex((b) => b.id === el.dataset.id);
+    if (i > 0) [set.buttons[i - 1], set.buttons[i]] = [set.buttons[i], set.buttons[i - 1]];
+    saveQr();
+    renderQrView(set.id);
+  },
+  'qr-delete-set': () => {
+    const set = qrById(S.qrId);
+    if (!confirm(`Delete quick reply set "${set.name}"?`)) return;
+    S.qr = S.qr.filter((x) => x.id !== set.id);
+    saveQr();
+    go('#/settings/qr');
+  },
+  'qr-export': async () => {
+    const set = qrById(S.qrId);
+    const data = { version: 2, name: set.name, disableSend: false, placeBeforeInput: false, injectInput: false, qrList: set.buttons.map((b, i) => ({ id: i + 1, label: b.label, title: b.title || '', message: b.message, showLabel: true })) };
+    await saveFile(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `${safeName(set.name)}.json`);
+  },
   'qa-continue': () => {
     closeSheet();
     if (S.generating) return;
@@ -1946,6 +2335,9 @@ const actions = {
       matchWholeWords: $('#le-whole').checked,
       caseSensitive: $('#le-case').checked,
       matchPersonaDescription: $('#le-persona').checked,
+      sticky: numOrNull($('#le-sticky').value) || 0,
+      cooldown: numOrNull($('#le-cooldown').value) || 0,
+      delay: numOrNull($('#le-delay').value) || 0,
     });
     saveLorebooks(); closeSheet(); renderLorebookView(b.id);
   },
@@ -2008,6 +2400,7 @@ const actions = {
     saveSettings();
     rerenderSettings();
   },
+  'enhance-reset': () => { S.settings.ext.enhance.prompt = DEFAULT_ENHANCE_SETTINGS.prompt; saveSettings(); rerenderSettings(); },
   'reset-main': () => { S.settings.prompt.main = DEFAULT_MAIN; saveSettings(); rerenderSettings(); },
   'persona-avatar': async () => {
     const [f] = await pickFile('file-avatar');
@@ -2029,7 +2422,7 @@ const actions = {
     if (!confirm('Delete ALL characters, chats and settings on this device?')) return;
     if (!confirm('Really? This cannot be undone.')) return;
     await db.clear('characters'); await db.clear('chats'); await db.clear('kv');
-    S.presets = []; S.lorebooks = []; S.regex = []; S.groups = [];
+    S.presets = []; S.lorebooks = []; S.regex = []; S.groups = []; S.qr = [];
     S.settings = defaultSettings();
     await saveSettings(true);
     go('#/');
@@ -2080,6 +2473,21 @@ document.addEventListener('input', (e) => {
       const sEl = $('.search');
       if (sEl) { sEl.focus(); sEl.setSelectionRange(sEl.value.length, sEl.value.length); }
     }, 200);
+  } else if ('qrName' in el.dataset || el.dataset.qrLabel || el.dataset.qrMessage) {
+    const set = qrById(S.qrId);
+    if ('qrName' in el.dataset) set.name = el.value;
+    else {
+      const b = set.buttons.find((x) => x.id === (el.dataset.qrLabel || el.dataset.qrMessage));
+      if (b) b[el.dataset.qrLabel ? 'label' : 'message'] = el.value;
+    }
+    saveQr();
+  } else if (el.dataset.extEnhance) {
+    S.settings.ext.enhance[el.dataset.extEnhance] = el.value;
+    saveSettings();
+  } else if (el.dataset.extSum) {
+    const k = el.dataset.extSum;
+    S.settings.ext.summarize[k] = ['words', 'every', 'depth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.summarize[k]) : el.value;
+    saveSettings();
   } else if ('lbName' in el.dataset) {
     const b = bookById(S.lbId);
     b.name = el.value;
@@ -2095,7 +2503,38 @@ document.addEventListener('change', (e) => {
     if (el.dataset.bind === 'ui.fontSize') render();
     return;
   }
+  if (el.dataset.extSumSelect === 'position') {
+    S.settings.ext.summarize.position = el.value;
+    saveSettings();
+    rerenderSettings();
+    return;
+  }
   if ('num' in el.dataset && el.dataset.bind) el.value = getPath(el.dataset.bind);
+  if ('qrVisible' in el.dataset) {
+    qrById(S.qrId).visible = el.checked;
+    saveQr();
+    return;
+  }
+  if (el.dataset.qrToggle) {
+    qrById(el.dataset.qrToggle).visible = el.checked;
+    saveQr();
+    return;
+  }
+  if (el.dataset.extEnhanceToggle) {
+    S.settings.ext.enhance[el.dataset.extEnhanceToggle] = el.checked;
+    saveSettings();
+    return;
+  }
+  if (el.dataset.extSumToggle) {
+    S.settings.ext.summarize[el.dataset.extSumToggle] = el.checked;
+    saveSettings();
+    return;
+  }
+  if (el.dataset.extSumSelect) {
+    S.settings.ext.summarize[el.dataset.extSumSelect] = el.value;
+    saveSettings();
+    return;
+  }
   if (el.dataset.gMember) {
     const g = collectGroupDraft();
     renderGroupEditor(g.isNew ? 'new' : g.id);
@@ -2166,6 +2605,12 @@ document.addEventListener('change', (e) => {
   }
 });
 
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey || route().name !== 'chat') return;
+  if (!S.settings.ext.enhance.enabled || !S.settings.ext.enhance.keyboardShortcut) return;
+  if (e.code === 'KeyE') { e.preventDefault(); enhanceDraft(); } else if (e.code === 'KeyZ') { e.preventDefault(); restoreDraft(); }
+});
+
 // ---------- icons (inline SVG) ----------
 const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
 const ICONS = {
@@ -2206,10 +2651,14 @@ async function boot() {
     preset: { ...def.preset, ...settings.preset },
     prompt: { ...def.prompt, ...settings.prompt },
     ui: { ...def.ui, ...settings.ui },
+    ext: {
+      enhance: { ...def.ext.enhance, ...((settings.ext || {}).enhance || {}) },
+      summarize: { ...def.ext.summarize, ...((settings.ext || {}).summarize || {}) },
+    },
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
   if (!settings) await saveSettings(true);
-  for (const key of ['presets', 'lorebooks', 'regex', 'groups']) {
+  for (const key of ['presets', 'lorebooks', 'regex', 'groups', 'qr']) {
     try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

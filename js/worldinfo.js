@@ -57,6 +57,9 @@ export function normalizeEntry(e, i = 0) {
       ? { isExclude: !!e.characterFilter.isExclude, names: e.characterFilter.names.map(String), tags: e.characterFilter.tags || [] }
       : null,
     outletName: String(e.outletName || ''),
+    sticky: Number(first(e.sticky, ext.sticky, 0)) || 0,
+    cooldown: Number(first(e.cooldown, ext.cooldown, 0)) || 0,
+    delay: Number(first(e.delay, ext.delay, 0)) || 0,
   };
 }
 
@@ -87,7 +90,8 @@ export function exportBook(book) {
       matchPersonaDescription: e.matchPersonaDescription, matchCharacterDescription: e.matchCharacterDescription,
       matchCharacterPersonality: e.matchCharacterPersonality, matchScenario: e.matchScenario,
       characterFilter: e.characterFilter || { isExclude: false, names: [], tags: [] },
-      outletName: e.outletName, displayIndex: i, addMemo: true, vectorized: false, sticky: 0, cooldown: 0, delay: 0,
+      outletName: e.outletName, displayIndex: i, addMemo: true, vectorized: false,
+      sticky: e.sticky || 0, cooldown: e.cooldown || 0, delay: e.delay || 0,
     };
   });
   return { entries };
@@ -134,9 +138,10 @@ function filterPasses(e, charNames) {
 /**
  * entries: normalized entries (from all active books)
  * history: array of message strings, oldest first
+ * timed: per-chat state for sticky/cooldown (mutated), keyed by entry._key
  * Returns buckets of activated entries (contents NOT yet macro-processed).
  */
-export function activateWorldInfo({ entries, history, char, persona, defaultDepth = 4 }) {
+export function activateWorldInfo({ entries, history, char, persona, defaultDepth = 4, timed = null, chatLength = null }) {
   const out = { before: [], after: [], depth: [], anTop: [], anBottom: [], emTop: [], emBottom: [], outlets: {}, count: 0 };
   if (!entries || !entries.length) return out;
   const charNames = new Set([norm(char && char.name), norm(char && char.fileName)].filter(Boolean));
@@ -153,8 +158,19 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
     return text;
   };
 
+  // Timed effects (SillyTavern): delay = needs N messages in the chat; sticky = stays on for N
+  // more messages after triggering; cooldown = can't trigger for N messages afterwards.
+  const now = chatLength ?? history.length;
+  const stateOf = (e) => (timed && e._key ? timed[e._key] : null);
+  const stickyNow = (e) => { const t = stateOf(e); return !!(t && t.sticky && now >= t.sticky.start && now <= t.sticky.end); };
+  const coolingNow = (e) => { const t = stateOf(e); return !!(t && t.cooldown && now >= t.cooldown.from && now <= t.cooldown.to); };
+  const viaSticky = new Set();
+
   const active = new Set();
   for (const e of candidates) {
+    if (e.delay && now < e.delay) continue;
+    if (stickyNow(e)) { active.add(e); viaSticky.add(e); continue; }
+    if (coolingNow(e)) continue;
     if (e.constant) { if (roll(e)) active.add(e); continue; }
     if (e.delayUntilRecursion || !e.keys.length) continue;
     if (entryMatches(e, scanFor(e)) && roll(e)) active.add(e);
@@ -166,6 +182,7 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
     const newly = [];
     for (const e of candidates) {
       if (active.has(e) || e.excludeRecursion || e.constant || !e.keys.length) continue;
+      if ((e.delay && now < e.delay) || coolingNow(e)) continue;
       if (entryMatches(e, buffer) && roll(e)) newly.push(e);
     }
     if (!newly.length) break;
@@ -185,7 +202,8 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
     const alive = members.filter((e) => active.has(e));
     if (alive.length < 2) continue;
     let winner;
-    const prioritized = alive.filter((e) => e.groupOverride);
+    const stuck = alive.filter((e) => viaSticky.has(e));
+    const prioritized = stuck.length ? stuck : alive.filter((e) => e.groupOverride);
     if (prioritized.length) {
       winner = prioritized.reduce((a, b) => (b.order > a.order ? b : a));
     } else {
@@ -199,6 +217,16 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
       }
     }
     alive.forEach((e) => { if (e !== winner) active.delete(e); });
+  }
+
+  if (timed) {
+    for (const e of active) {
+      if (viaSticky.has(e) || !e._key || (!e.sticky && !e.cooldown)) continue;
+      timed[e._key] = {
+        sticky: e.sticky ? { start: now, end: now + e.sticky } : null,
+        cooldown: e.cooldown ? { from: now + e.sticky + 1, to: now + e.sticky + e.cooldown } : null,
+      };
+    }
   }
 
   const sorted = [...active].sort((a, b) => a.order - b.order);
