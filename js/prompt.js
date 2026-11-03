@@ -43,7 +43,7 @@ function formatExamples(raw, heading) {
  * group: { names: 'A, B', nameOf(msg) } for group chats (names are prefixed to history, nudge added)
  * Returns { messages, stats, vars }
  */
-export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null, memory = null, continuity = '' }) {
+export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null, memory = null, continuity = '', vision = null, recall = null }) {
   // Ghosted messages are covered by long-term memory and not sent (they stay visible in the chat).
   const fullLength = history.length; // timed lorebook effects count every message
   history = history.filter((m) => !m.ghost && !m.hidden);
@@ -193,12 +193,18 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
   }
 
   // ---- chat history within the token budget
+  // Chat recall (vector storage): relevant older moments, inserted in the chat.
+  if (recall && recall.text && recall.text.trim()) {
+    injections.push({ depth: Number(recall.depth) || 0, order: 60, role: recall.role || 'system', content: macro((recall.template || '{{text}}').replace(/\{\{text\}\}/gi, recall.text.trim())) });
+  }
+
   const fixed = blocks.reduce((s, b) => s + (b.content ? estTokens(b.content) + 4 : 0), 0)
     + injections.reduce((s, i) => s + estTokens(i.content) + 4, 0)
     + estTokens(pr.new_chat_prompt);
   const budget = (samplers.context_size || 8192) - (samplers.max_tokens || 500) - fixed - 32;
   const hist = [];
   let used = 0;
+  let imageBudget = vision && vision.enabled ? Math.max(0, Number(vision.maxImages) || 0) : 0;
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
     const depth = history.length - 1 - i;
@@ -211,12 +217,19 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
       text = macro(text);
       env.char = speaking;
     } else text = macro(text);
-    if (!text.trim()) continue;
+    // Attached photos go to vision models (newest first, up to maxImages); generated images aren't sent back.
+    let images = null;
+    if (Array.isArray(m.images) && m.images.length && !m.generated) {
+      if (imageBudget > 0) { images = m.images.slice(0, imageBudget); imageBudget -= images.length; } else text = `${text} [image]`.trim();
+    }
+    if (!text.trim() && !images) continue;
     if (author) text = `${author}: ${text}`;
-    const t = estTokens(text) + 4;
+    const t = estTokens(text) + 4 + (images ? images.length * 800 : 0);
     if (used + t > budget && hist.length) break;
     used += t;
-    hist.unshift({ role: m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant', content: text });
+    const item = { role: m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant', content: text };
+    if (images) item.images = images;
+    hist.unshift(item);
   }
   // in-chat injections (depth 0 = after the last message)
   const byDepth = new Map();
@@ -249,7 +262,7 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
   else if (group) messages.push({ role: 'system', content: macro(pick('group_nudge_prompt', DEFAULT_GROUP_NUDGE)) });
 
   return {
-    messages: messages.filter((m) => m.content && m.content.trim()),
+    messages: messages.filter((m) => (m.content && m.content.trim()) || (m.images && m.images.length)),
     vars: env.vars,
     timed,
     stats: {

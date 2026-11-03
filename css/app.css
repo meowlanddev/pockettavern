@@ -468,3 +468,22 @@ body.show-timestamps .msg .timestamp { display: block; font-size: .7rem; color: 
 body:not(.chat-bubble) .mes.user .ch_name { text-align: left; }
 
 .msg-actions .tok-count { align-self: center; font-size: .72rem; color: var(--muted); padding: 0 4px; }
+
+/* ---------- images, expressions ---------- */
+.mes-images { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.mes-img { max-width: min(100%, 320px); max-height: 360px; border-radius: 12px; object-fit: cover; cursor: zoom-in; }
+.img-full { width: 100%; border-radius: 12px; }
+.attach-row { display: flex; gap: 8px; padding: 6px 10px 0; overflow-x: auto; flex-shrink: 0; }
+.attach-row .att { position: relative; flex-shrink: 0; }
+.attach-row img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); }
+.attach-row button { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%; background: var(--danger); color: #fff; font-size: 14px; line-height: 1; }
+.expr-panel { position: relative; flex-shrink: 0; height: 34vh; max-height: 360px; display: flex; justify-content: center; align-items: flex-end; overflow: hidden; border-bottom: 1px solid var(--line); background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 60%, transparent)); cursor: pointer; }
+.expr-panel[hidden] { display: none; }
+.expr-panel img { height: 100%; width: auto; max-width: 100%; object-fit: contain; }
+.expr-panel.collapsed { height: 72px; }
+.expr-label { position: absolute; left: 10px; bottom: 6px; font-size: .72rem; color: var(--muted); background: color-mix(in srgb, var(--bg) 70%, transparent); padding: 2px 8px; border-radius: 8px; }
+.sprite-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 6px; margin: 4px 0 8px; }
+.sprite-grid figure { margin: 0; text-align: center; }
+.sprite-grid img { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; background: var(--bg3); border-radius: 8px; }
+.sprite-grid figcaption { font-size: .68rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }

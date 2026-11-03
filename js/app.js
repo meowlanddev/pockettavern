@@ -1,7 +1,8 @@
 import * as db from './db.js';
 import { parseCardFile, blobToAvatar, exportCardPng, toV2, isPng, normalizeCard } from './card.js';
 import { buildPrompt, macros } from './prompt.js';
-import { PROVIDERS, generate, listModels } from './api.js';
+import { PROVIDERS, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
+import * as X from './extras.js';
 import { evaluateMacros } from './macros.js';
 import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './worldinfo.js';
 import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
@@ -13,7 +14,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -36,7 +37,7 @@ function defaultSettings() {
     personas: [{ id: pid, name: 'User', description: '', avatar: null }],
     activePersona: pid,
     ui: { enterSends: false, fontSize: 16 },
-    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS } },
+    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS }, ...structuredClone(X.DEFAULT_EXT) },
     appearance: structuredClone(DEFAULT_APPEARANCE),
   };
 }
@@ -164,7 +165,268 @@ function promptFor(chat, char, history, opts = {}) {
     mode: opts.mode || 'normal', group, quietPrompt: opts.quietPrompt || '',
     summary: summaryFor(chat), timed: structuredClone(chat.wiTimed || {}),
     memory: memoryFor(chat), continuity: continuityFor(chat),
+    vision: S.settings.ext.vision,
+    recall: opts.recall ? { text: opts.recall, depth: S.settings.ext.recall.depth, template: S.settings.ext.recall.template } : null,
   });
+}
+
+// ---------- chat recall (ST "Vector Storage") ----------
+/** Relevant older messages for the next reply: keyword (BM25, free) or embeddings. */
+async function computeRecall(chat, history) {
+  const cfg = S.settings.ext.recall;
+  if (!cfg.enabled) return '';
+  const msgs = history.filter((m) => !m.hidden && m.role !== 'system' && (m.swipes[m.swipeIdx] || '').trim());
+  const skip = Math.max(2, Number(cfg.skipRecent) || 12);
+  if (msgs.length <= skip) return '';
+  const pool = msgs.slice(0, msgs.length - skip);
+  const query = msgs.slice(-2).map((m) => m.swipes[m.swipeIdx]).join('\n');
+  const k = Math.max(1, Number(cfg.topK) || 3);
+  let picked = [];
+  if (cfg.mode === 'embeddings') {
+    if (!cfg.embKey) throw new Error('Chat recall: add an embeddings API key, or switch to keyword mode.');
+    const need = pool.filter((m) => !(m.emb && m.emb.m === cfg.embModel && m.emb.s === m.swipeIdx));
+    for (let i = 0; i < need.length; i += 64) {
+      const batch = need.slice(i, i + 64);
+      const vecs = await embed(cfg, batch.map((m) => m.swipes[m.swipeIdx].slice(0, 6000)));
+      batch.forEach((m, j) => { m.emb = { m: cfg.embModel, s: m.swipeIdx, v: X.packVector(vecs[j]) }; });
+    }
+    if (need.length) saveChat(chat);
+    const [qv] = await embed(cfg, [query.slice(0, 6000)]);
+    picked = pool.map((m) => ({ m, score: X.cosine(qv, X.unpackVector(m.emb.v)) }))
+      .filter((x) => x.score >= Math.max(0.2, Number(cfg.minScore) || 0.3)).sort((a, b) => b.score - a.score).slice(0, k).map((x) => x.m);
+  } else {
+    const ranked = X.bm25(query, pool.map((m) => ({ id: m.id, text: m.swipes[m.swipeIdx] })));
+    const ids = new Set(ranked.filter((x) => x.score >= (Number(cfg.minScore) || 0.25)).slice(0, k).map((x) => x.id));
+    picked = pool.filter((m) => ids.has(m.id));
+  }
+  picked.sort((a, b) => msgs.indexOf(a) - msgs.indexOf(b));
+  return picked.map((m) => `- ${memNameOf(m)}: ${m.swipes[m.swipeIdx].replace(/\s+/g, ' ').slice(0, 600)}`).join('\n');
+}
+
+// ---------- image generation (ST "Image Generation") ----------
+function lastSpeaker(chat) {
+  if (!S.group) return S.char;
+  const l = [...chat.messages].reverse().find((m) => m.role === 'assistant' && m.charId);
+  return (l && S.members.get(l.charId)) || groupMembers()[0] || S.char;
+}
+
+async function runImageGen(mode, extra = '') {
+  const cfg = S.settings.ext.image;
+  const chat = S.chat;
+  if (S.generating) return toast('Wait for the current reply first.');
+  const speaker = lastSpeaker(chat);
+  const msg = { id: db.uid(), role: 'assistant', swipes: [''], swipeIdx: 0, ts: Date.now(), images: [], generated: true };
+  if (S.group) { msg.charId = speaker.id; msg.name = speaker.name; }
+  chat.messages.push(msg);
+  S.generating = chat.id;
+  S.abort = new AbortController();
+  updateSendButton();
+  renderMessages(true);
+  try {
+    let prompt = extra;
+    if (mode !== 'free' || cfg.writePrompt) {
+      toast('Writing the image prompt…', 20000);
+      const instr = X.imagePromptInstruction(mode, extra);
+      prompt = normalizeGeneratedText(await quietGenerate(instr, { maxTokens: 400, signal: S.abort.signal }));
+      prompt = prompt.replace(/^(prompt|image prompt)\s*:\s*/i, '').replace(/^["']|["']$/g, '').trim();
+    }
+    if (!prompt) throw new Error('No image prompt was written.');
+    toast('Generating image…', 60000);
+    const [w, h] = X.aspectSize(cfg.aspect);
+    let src = await generateImage(cfg, activeConn(), prompt, { width: w, height: h, signal: S.abort.signal });
+    if (src.startsWith('data:')) src = await blobToAvatar(await (await fetch(src)).blob(), 1280);
+    if (!X.isSafeImageSrc(src)) throw new Error('The image service returned something that is not an image.');
+    msg.images = [src];
+    msg.imagePrompt = prompt;
+    toast('Image ready', 2000);
+  } catch (e) {
+    chat.messages.splice(chat.messages.indexOf(msg), 1);
+    if (e.name !== 'AbortError') toast('Image generation: ' + (e.message || e), 8000);
+  } finally {
+    S.generating = null;
+    S.abort = null;
+    updateSendButton();
+    await saveChat(chat);
+    if (S.chat === chat) renderMessages(true);
+  }
+}
+
+function imageSheet() {
+  const cfg = S.settings.ext.image;
+  const names = { char: (lastSpeaker(S.chat) || {}).name, user: activePersona().name };
+  openSheet(`
+    <div class="sheet-title">Generate image</div>
+    <p class="hint">${esc({ openrouter: `OpenRouter · ${cfg.model}`, openai: `OpenAI-compatible · ${cfg.model}`, pollinations: 'Pollinations (free)' }[cfg.provider] || cfg.provider)} — change in Settings → Extensions.</p>
+    <div class="menu-grid two">
+      ${['scene', 'char', 'user'].map((m) => `<button data-action="img-gen" data-mode="${m}">${ICONS.image}<span>${esc(X.IMAGE_MODES[m].replace('{{char}}', names.char || 'character').replace('{{user}}', names.user || 'you'))}</span></button>`).join('')}
+    </div>
+    <label class="field"><span class="label">Or describe it</span><textarea id="img-free" rows="3" placeholder="e.g. Wade's bike parked outside the bar at night, neon rain"></textarea></label>
+    <button class="btn primary block" data-action="img-gen" data-mode="free">${cfg.writePrompt ? 'Generate (the AI polishes your description)' : 'Generate'}</button>`);
+}
+
+// ---------- text to speech (ST "TTS") ----------
+let speaking = null;
+function stopSpeaking() {
+  try { window.speechSynthesis && speechSynthesis.cancel(); } catch { /* ignore */ }
+  if (S.audio) { S.audio.pause(); S.audio.removeAttribute('src'); }
+  if (S.ttsAbort) S.ttsAbort.abort();
+  speaking = null;
+}
+
+/** iOS only plays audio started from a tap; prime the players during the send tap. */
+function unlockAudio() {
+  const cfg = S.settings.ext.tts;
+  if (!cfg.enabled || S.audioUnlocked) return;
+  S.audioUnlocked = true;
+  try {
+    if (cfg.provider === 'browser' && window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(' '));
+    S.audio = S.audio || new Audio();
+    S.audio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8isVNoMPMjAAAA0gAAABEVFGmgqK////9bP/6XCykxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+    S.audio.play().then(() => S.audio.pause()).catch(() => {});
+  } catch { /* ignore */ }
+}
+
+function voiceFor(msg) {
+  const cfg = S.settings.ext.tts;
+  if (msg.role === 'system') return cfg.narratorVoice || cfg.defaultVoice;
+  const who = msg.role === 'user' ? null : speakerOf(msg);
+  return (who && who.ttsVoice) || cfg.defaultVoice;
+}
+
+async function speakMessage(msg) {
+  const cfg = S.settings.ext.tts;
+  if (speaking === msg.id) { stopSpeaking(); renderMessages(); return; }
+  stopSpeaking();
+  const raw = (msg.tr && msg.tr[msg.swipeIdx] && !msg.showOriginal) ? msg.tr[msg.swipeIdx].text : msg.swipes[msg.swipeIdx];
+  const text = X.speakableText(evaluateMacros(raw || '', { char: (speakerOf(msg) || S.char || {}).name, user: activePersona().name, vars: {} }), cfg);
+  if (!text) return toast('Nothing to read aloud here.');
+  speaking = msg.id;
+  const done = () => { if (speaking === msg.id) { speaking = null; if (S.chat && S.chat.messages.includes(msg)) renderMessages(); } };
+  try {
+    if (cfg.provider === 'browser') {
+      if (!window.speechSynthesis) throw new Error('This browser has no built-in voices.');
+      const u = new SpeechSynthesisUtterance(text);
+      const v = voiceFor(msg);
+      const voice = v && speechSynthesis.getVoices().find((x) => x.voiceURI === v || x.name === v);
+      if (voice) { u.voice = voice; u.lang = voice.lang; }
+      u.rate = Number(cfg.rate) || 1;
+      u.onend = done;
+      u.onerror = done;
+      speechSynthesis.speak(u);
+    } else {
+      if (!cfg.apiKey) throw new Error('Add a TTS API key in Settings → Extensions → Text-to-speech.');
+      S.ttsAbort = new AbortController();
+      const blob = await ttsAudio(cfg, text.slice(0, 4000), voiceFor(msg), S.ttsAbort.signal);
+      if (speaking !== msg.id) return;
+      S.audio = S.audio || new Audio();
+      if (S.audioUrl) URL.revokeObjectURL(S.audioUrl);
+      S.audioUrl = URL.createObjectURL(blob);
+      S.audio.src = S.audioUrl;
+      S.audio.onended = done;
+      await S.audio.play();
+    }
+    if (S.chat && S.chat.messages.includes(msg)) renderMessages();
+  } catch (e) {
+    speaking = null;
+    if (e.name !== 'AbortError') toast('TTS: ' + (e.message || e), 6000);
+  }
+}
+
+async function voicesSheet(target) {
+  const cfg = S.settings.ext.tts;
+  const sheet = openSheet('<div class="sheet-title">Voices</div><p class="muted">Loading…</p>', 'tall');
+  try {
+    let voices;
+    if (cfg.provider === 'browser') {
+      voices = speechSynthesis.getVoices();
+      if (!voices.length) { await new Promise((r) => { speechSynthesis.onvoiceschanged = r; setTimeout(r, 1500); }); voices = speechSynthesis.getVoices(); }
+      voices = voices.map((v) => ({ id: v.voiceURI || v.name, name: `${v.name} (${v.lang})` }));
+    } else if (cfg.provider === 'elevenlabs') voices = await listElevenVoices(cfg.apiKey);
+    else voices = X.OPENAI_VOICES.map((v) => ({ id: v, name: v }));
+    sheet.innerHTML = `<div class="sheet-title">Pick a voice</div><div class="model-list">${voices.map((v) => `<button class="model-item" data-action="pick-voice" data-target="${esc(target)}" data-id="${esc(v.id)}"><span class="mi-name">${esc(v.name)}</span></button>`).join('') || '<p class="muted">No voices found.</p>'}</div>`;
+  } catch (e) {
+    sheet.innerHTML = `<div class="sheet-title">Voices</div><p class="error">${esc(e.message)}</p>`;
+  }
+}
+
+// ---------- translation (ST "Chat Translation") ----------
+async function translateText(text, lang) {
+  const cfg = S.settings.ext.translate;
+  const out = await memCall(`Translate the user's message into ${lang}. Keep every bit of formatting exactly: *asterisks*, "quotes", line breaks, HTML tags, names. Do not add or remove anything. Output only the translation.`,
+    text, Math.round(text.length / 2) + 400, cfg.model);
+  return normalizeGeneratedText(out);
+}
+
+async function translateMessage(msg, chat = S.chat) {
+  const cfg = S.settings.ext.translate;
+  const idx = msg.swipeIdx;
+  msg.tr = msg.tr || {};
+  try {
+    msg.tr[idx] = { lang: cfg.target, text: await translateText(msg.swipes[idx], cfg.target) };
+    msg.showOriginal = false;
+    await saveChat(chat);
+    if (S.chat === chat) renderMessages();
+  } catch (e) { toast('Translation: ' + (e.message || e), 6000); }
+}
+
+// ---------- character expressions (ST "Character Expressions") ----------
+const spriteCache = new Map();
+async function spritesOf(charId) {
+  if (!charId) return {};
+  if (!spriteCache.has(charId)) {
+    let v = {};
+    try { v = (await db.get('kv', `sprites:${charId}`)) || {}; } catch { /* none */ }
+    spriteCache.set(charId, v);
+  }
+  return spriteCache.get(charId);
+}
+async function saveSprites(charId, sprites) {
+  spriteCache.set(charId, sprites);
+  await db.put('kv', sprites, `sprites:${charId}`);
+}
+
+/** Keeps transparency (unlike avatars, which become JPEG). */
+async function blobToPng(blob, max = 768) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Not an image')); i.src = url; });
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  } finally { URL.revokeObjectURL(url); }
+}
+
+async function classifyExpression(chat, msg) {
+  const cfg = S.settings.ext.expressions;
+  const who = speakerOf(msg);
+  if (!cfg.enabled || !who || !who.id) return;
+  const sprites = await spritesOf(who.id);
+  const labels = Object.keys(sprites);
+  if (labels.length < 2) return;
+  try {
+    const out = await memCall(`You label emotions. Read the roleplay message and answer with exactly one word from this list, the emotion ${who.name} shows most: ${labels.join(', ')}.`,
+      String(msg.swipes[msg.swipeIdx] || '').slice(-3000), 20, cfg.model);
+    msg.expr = X.pickExpression(out, labels);
+    await saveChat(chat);
+    if (S.chat === chat) updateExpressionPanel();
+  } catch (e) { console.warn('expression', e); }
+}
+
+async function updateExpressionPanel() {
+  const panel = $('#expr-panel');
+  if (!panel) return;
+  const cfg = S.settings.ext.expressions;
+  const last = S.chat && [...S.chat.messages].reverse().find((m) => m.role === 'assistant' && !m.generated);
+  const who = last ? speakerOf(last) : (S.group ? groupMembers()[0] : S.char);
+  const sprites = cfg.enabled && who ? await spritesOf(who.id) : {};
+  const label = (last && last.expr && sprites[last.expr]) ? last.expr : (sprites.neutral ? 'neutral' : Object.keys(sprites)[0]);
+  const src = label && sprites[label];
+  if (!src || !X.isSafeImageSrc(src)) { panel.hidden = true; return; }
+  panel.hidden = false;
+  panel.classList.toggle('collapsed', !!cfg.collapsed);
+  panel.innerHTML = `<img src="${esc(src)}" alt="${esc(label)}"><span class="expr-label">${esc(who.name)} · ${esc(label)}</span>`;
 }
 
 // ---------- long-term memory (Summaryception-style) ----------
@@ -505,6 +767,11 @@ function scriptApi(chat) {
       saveSettings();
     },
     custom: {
+      imagine: (arg) => runImageGen(...imagineArgs(arg)),
+      sd: (arg) => runImageGen(...imagineArgs(arg)),
+      image: (arg) => runImageGen(...imagineArgs(arg)),
+      speak: (arg) => { const m = [...chat.messages].reverse().find((x) => x.role === 'assistant'); if (arg && arg.trim()) { speakMessage({ id: 'cmd', role: 'system', swipes: [arg], swipeIdx: 0 }); } else if (m) speakMessage(m); },
+      translate: async (arg) => translateText(arg, S.settings.ext.translate.target),
       hide: (arg) => setHidden(chat, arg, true),
       unhide: (arg) => setHidden(chat, arg, false),
       'sc-status': () => {
@@ -875,6 +1142,15 @@ function applyPresetSamplers(p) {
   saveSettings();
 }
 
+function imagineArgs(arg) {
+  const a = String(arg || '').trim();
+  const low = a.toLowerCase();
+  if (!a || ['scene', 'last'].includes(low)) return ['scene'];
+  if (['char', 'character', 'you', 'face', 'portrait'].includes(low)) return ['char'];
+  if (['me', 'user', 'persona'].includes(low)) return ['user'];
+  return ['free', a];
+}
+
 /** /hide 3, /hide 2-5, /unhide (no argument = last message). Indexes are 0-based like SillyTavern's. */
 function setHidden(chat, arg, hidden) {
   const n = chat.messages.length;
@@ -955,6 +1231,29 @@ async function importStZip(file) {
         done.chars++;
       } catch (err) { log.push(`${e.rel}: ${err.message}`); }
     }
+
+    // Expression sprites (characters/<character file name>/<emotion>.png)
+    const spriteFiles = z.characters.filter((e) => e.rel.split('/').length === 2 && /\.(png|webp|jpe?g|gif)$/i.test(e.rel));
+    const byFolder = new Map();
+    for (const e of spriteFiles) {
+      const folder = e.rel.split('/')[0].toLowerCase();
+      if (!byFolder.has(folder)) byFolder.set(folder, []);
+      byFolder.get(folder).push(e);
+    }
+    let spriteCount = 0;
+    for (const [folder, list] of byFolder) {
+      const c = charByFile.get(folder);
+      if (!c) continue;
+      const sp = { ...(await spritesOf(c.id)) };
+      for (const e of list) {
+        const label = baseName(e.rel).toLowerCase();
+        if (sp[label]) continue;
+        prog(`Expressions for ${c.name}…`);
+        try { sp[label] = await blobToPng(await readEntry(file, e)); spriteCount++; } catch (err) { log.push(`${e.rel}: ${err.message}`); }
+      }
+      await saveSprites(c.id, sp);
+    }
+    done.sprites = spriteCount;
 
     // Chats (chats/<character file name>/<chat>.jsonl)
     const chatFiles = z.chats.filter((e) => /\.jsonl$/i.test(e.rel) && e.rel.includes('/'));
@@ -1124,7 +1423,7 @@ async function importStZip(file) {
     log.unshift(err.message || String(err));
   }
   const rows = [
-    ['Characters', done.chars], ['Chats', done.chats], ['Group chats', done.groups ? `${done.groups} groups, ${done.groupChats} chats` : 0],
+    ['Characters', done.chars], ['Expression sprites', done.sprites], ['Chats', done.chats], ['Group chats', done.groups ? `${done.groups} groups, ${done.groupChats} chats` : 0],
     ['Personas', done.personas], ['Lorebooks', done.books], ['Presets', done.presets], ['Regex scripts', done.regex],
     ['Quick reply sets', done.qr], ['Theme', done.themes], ['Already here (skipped)', done.skipped],
   ].filter(([, v]) => v);
@@ -1296,10 +1595,12 @@ async function renderChatView(charId, chatId) {
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
     </header>
     <div id="sheld">
+      <div id="expr-panel" class="expr-panel" data-action="expr-toggle" hidden></div>
       <main class="scroll messages" id="chat"></main>
+      <div id="attach-row" class="attach-row" hidden></div>
       ${qrBarHtml()}
       <footer class="composer" id="send_form">
-        <div id="leftSendForm"><button class="qa-btn" id="options_button" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button></div>
+        <div id="leftSendForm"><button class="qa-btn" id="options_button" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button>${S.settings.ext.vision.enabled ? `<button class="qa-btn" id="attach_button" data-action="attach" aria-label="Attach an image">${ICONS.image}</button>` : ''}</div>
         <textarea id="send_textarea" rows="1" placeholder="Message ${esc(char.name)}" enterkeyhint="${S.settings.ui.enterSends ? 'send' : 'enter'}"></textarea>
         <div id="rightSendForm">
           <button class="enh-btn" id="enh-btn" data-action="enhance" aria-label="Enhance reply" title="Enhance reply" hidden>✨</button>
@@ -1320,6 +1621,16 @@ async function renderChatView(charId, chatId) {
   });
   renderMessages(true);
   updateSendButton();
+  renderAttachRow();
+  updateExpressionPanel();
+}
+
+function renderAttachRow() {
+  const row = $('#attach-row');
+  if (!row) return;
+  const imgs = (S.pending && S.pending.chatId === S.chat.id) ? S.pending.images : [];
+  row.hidden = !imgs.length;
+  row.innerHTML = imgs.map((src, i) => `<div class="att"><img src="${esc(src)}" alt=""><button data-action="attach-remove" data-i="${i}" aria-label="Remove">×</button></div>`).join('');
 }
 
 function autosize(el) {
@@ -1342,6 +1653,8 @@ function msgHtml(msg, isLast) {
   const reasoning = (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '';
   const editing = S.editing === msg.id;
   const n = msg.swipes.length;
+  const imgs = Array.isArray(msg.images) ? msg.images.filter(X.isSafeImageSrc) : [];
+  const imagesHtml = imgs.length ? `<div class="mes-images">${imgs.map((src, i) => `<img class="mes-img" src="${esc(src)}" alt="" data-action="view-image" data-id="${msg.id}" data-i="${i}">`).join('')}</div>` : '';
   let body;
   if (editing) {
     body = `<textarea class="edit-box" id="edit-box">${esc(raw)}</textarea>
@@ -1349,9 +1662,9 @@ function msgHtml(msg, isLast) {
   } else {
     const who = `is_user="${isUser}"`;
     body = raw ? `<div class="text mes_text" data-mid="${msg.id}" ${who}></div>`
-      : `<div class="text mes_text" ${who}>${generatingThis ? '<span class="typing"><i></i><i></i><i></i></span>' : '<span class="muted">(empty)</span>'}</div>`;
+      : (imgs.length ? '' : `<div class="text mes_text" ${who}>${generatingThis ? `<span class="typing"><i></i><i></i><i></i></span>${msg.generated ? ' <span class="muted small">creating an image…</span>' : ''}` : '<span class="muted">(empty)</span>'}</div>`);
   }
-  const swipes = (msg.role === 'assistant' && isLast && !editing && (n > 1 || !msg.greeting))
+  const swipes = (msg.role === 'assistant' && !msg.generated && isLast && !editing && (n > 1 || !msg.greeting))
     ? `<div class="swipes">
         <button class="sw-btn swipe_left" data-action="swipe" data-dir="-1" ${msg.swipeIdx === 0 || generatingThis ? 'disabled' : ''} aria-label="Previous swipe">${ICONS.left}</button>
         <span class="swipes-counter">${msg.swipeIdx + 1}/${n}</span>
@@ -1361,6 +1674,8 @@ function msgHtml(msg, isLast) {
     <div class="msg-actions">
       <button data-action="msg-edit" data-id="${msg.id}">${ICONS.edit}<span>Edit</span></button>
       <button data-action="msg-copy" data-id="${msg.id}">${ICONS.copy}<span>Copy</span></button>
+      ${S.settings.ext.tts.enabled && raw ? `<button data-action="msg-speak" data-id="${msg.id}">${ICONS.speaker}<span>${speaking === msg.id ? 'Stop' : 'Speak'}</span></button>` : ''}
+      ${S.settings.ext.translate.enabled && raw ? `<button data-action="msg-translate" data-id="${msg.id}">${ICONS.globe}<span>${msg.tr && msg.tr[msg.swipeIdx] ? (msg.showOriginal ? 'Show translation' : 'Show original') : 'Translate'}</span></button>` : ''}
       <button data-action="msg-hide" data-id="${msg.id}">${ICONS.eye}<span>${msg.hidden ? 'Unhide' : 'Hide'}</span></button>
       ${n > 1 ? `<button data-action="msg-del-swipe" data-id="${msg.id}">${ICONS.trash}<span>Delete swipe</span></button>` : ''}
       <span class="tok-count">≈${MEM.estTokens(raw)} tokens</span>
@@ -1379,6 +1694,7 @@ function msgHtml(msg, isLast) {
       <div class="bubble mes_block" data-action="toggle-msg" data-id="${msg.id}">
         <div class="name ch_name"><div class="flex-container"><div class="alignItemsBaseline"><span class="name_text">${esc(name)}</span>${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${msg.hidden ? '<span class="ghost-tag" title="Hidden from the AI">🙈 hidden</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>${when ? `<small class="timestamp">${esc(when)}</small>` : ''}<small class="mesIDDisplay">#${mesid}</small></div></div>
         ${reasoning && !editing ? reasoningHtml(reasoning, generatingThis && !raw) : ''}
+        ${imagesHtml}
         ${body}
         ${swipes}
       </div>
@@ -1396,7 +1712,8 @@ function displayHtml(msg) {
   const who = speakerOf(msg) || S.char;
   const env = { char: who.name, user: activePersona().name || 'User', vars: { ...(S.chat.vars || {}) } };
   const macro = (t) => evaluateMacros(t, env);
-  let text = macro(msg.swipes[msg.swipeIdx] || '');
+  const tr = msg.tr && msg.tr[msg.swipeIdx];
+  let text = macro((tr && !msg.showOriginal ? tr.text : msg.swipes[msg.swipeIdx]) || '');
   text = applyRegex(text, scriptsFor(S.members.get(msg.charId) || S.char), { placement: msg.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, isMarkdown: true, depth, macro });
   return formatMessage(text);
 }
@@ -1473,10 +1790,23 @@ async function sendMessage() {
     updateEnhanceButton();
     return runSlash(text);
   }
-  if (text) {
+  unlockAudio();
+  const images = (S.pending && S.pending.chatId === chat.id) ? S.pending.images.slice() : [];
+  if (text || images.length) {
     const env = { char: S.char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
-    const finalText = applyRegex(text, scriptsFor(S.char), { placement: PLACEMENT.USER, macro: (t) => evaluateMacros(t, env) });
-    chat.messages.push({ id: db.uid(), role: 'user', swipes: [finalText], swipeIdx: 0, ts: Date.now() });
+    let finalText = applyRegex(text, scriptsFor(S.char), { placement: PLACEMENT.USER, macro: (t) => evaluateMacros(t, env) });
+    const tcfg = S.settings.ext.translate;
+    let original = null;
+    if (tcfg.enabled && tcfg.input && finalText) {
+      toast('Translating…', 10000);
+      try { original = finalText; finalText = await translateText(finalText, tcfg.inputTarget || 'English'); toast('Translated', 1200); } catch (e) { toast('Translation failed, sending as written: ' + e.message, 5000); original = null; }
+    }
+    const um = { id: db.uid(), role: 'user', swipes: [finalText], swipeIdx: 0, ts: Date.now() };
+    if (images.length) um.images = images;
+    if (original) um.tr = { 0: { lang: 'original', text: original } };
+    chat.messages.push(um);
+    S.pending = null;
+    renderAttachRow();
     input.value = '';
     chat.draftInput = '';
     autosize(input);
@@ -1519,6 +1849,7 @@ async function runGeneration(mode, speakerId) {
   } else {
     msg = last;
     if (!msg || msg.role !== 'assistant') return;
+    if (msg.generated) { toast("That's a generated image — use ✨ → Generate image for another."); return; }
     if (mode === 'swipe') {
       msg.swipes.push('');
       msg.swipeIdx = msg.swipes.length - 1;
@@ -1530,7 +1861,9 @@ async function runGeneration(mode, speakerId) {
   const original = mode === 'continue' ? (msg.swipes[idx] || '') : '';
   const postfix = mode === 'continue' && original && !/\s$/.test(original) ? continuePostfix() : '';
   const history = mode === 'continue' ? chat.messages.slice() : chat.messages.slice(0, chat.messages.indexOf(msg));
-  const { messages, vars, timed } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal' });
+  let recall = '';
+  try { recall = await computeRecall(chat, history); } catch (e) { toast(e.message, 5000); }
+  const { messages, vars, timed } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal', recall });
   chat.vars = vars;
   chat.wiTimed = timed;
   const prevReasoning = msg.reasoning[idx] || '';
@@ -1588,6 +1921,10 @@ async function runGeneration(mode, speakerId) {
   } else if (msg.swipes[idx] && msg.swipes[idx].trim()) {
     maybeSummarize(chat);
     runAuditor(chat, msg).then(() => runMemory(chat, 'auto'));
+    const ex = S.settings.ext;
+    if (ex.expressions.enabled && ex.expressions.auto) classifyExpression(chat, msg);
+    const afterTranslate = ex.translate.enabled && ex.translate.auto ? translateMessage(msg, chat) : Promise.resolve();
+    if (ex.tts.enabled && ex.tts.auto && S.chat === chat) afterTranslate.then(() => speakMessage(msg));
   }
 }
 
@@ -1642,7 +1979,7 @@ function findMsg(id) {
 async function swipe(dir) {
   if (S.generating) return;
   const msg = S.chat.messages[S.chat.messages.length - 1];
-  if (!msg || msg.role !== 'assistant') return;
+  if (!msg || msg.role !== 'assistant' || msg.generated) return;
   if (dir < 0) {
     if (msg.swipeIdx > 0) msg.swipeIdx--;
   } else if (msg.swipeIdx < msg.swipes.length - 1) {
@@ -1714,6 +2051,7 @@ function quickActions() {
       <button data-action="qa-continue" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.forward}<span>Continue</span></button>
       <button data-action="qa-impersonate">${ICONS.user}<span>Impersonate</span></button>
       <button data-action="qa-regen" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.refresh}<span>Regenerate</span></button>
+      ${S.settings.ext.image.enabled ? `<button data-action="qa-image">${ICONS.image}<span>Generate image</span></button>` : ''}
       <button data-action="qa-note">${ICONS.note}<span>Author's Note${note && note.text && note.text.trim() ? ' •' : ''}</span></button>
       ${S.settings.ext.enhance.enabled ? `<button data-action="enhance">✨<span>Enhance draft</span></button>` : ''}
       ${S.enhanceOriginal && S.enhanceOriginal.chatId === S.chat.id ? `<button data-action="restore-draft">${ICONS.back}<span>Restore draft</span></button>` : ''}
@@ -1808,6 +2146,14 @@ const EDIT_FIELDS = [
   ['creator_notes', 'Creator notes', 'Not sent to the AI.'],
 ];
 
+async function fillSpriteGrid(charId) {
+  const grid = $('#sprite-grid');
+  if (!grid) return;
+  const sp = await spritesOf(charId);
+  const keys = Object.keys(sp).sort();
+  grid.innerHTML = keys.length ? keys.map((k) => `<figure><img src="${esc(X.isSafeImageSrc(sp[k]) ? sp[k] : '')}" alt=""><figcaption>${esc(k)}</figcaption></figure>`).join('') : '<span class="hint">No sprites yet. They also come over from a SillyTavern zip import.</span>';
+}
+
 async function renderEditView(id) {
   if (!S.draft || S.draft._for !== id) {
     if (id === 'new') {
@@ -1857,6 +2203,11 @@ async function renderEditView(id) {
           <label class="field grow"><span class="label">Role</span><select data-draft-dp="role">${['system', 'user', 'assistant'].map((r) => `<option ${((d.extensions && d.extensions.depth_prompt && d.extensions.depth_prompt.role) || 'system') === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
         </div></div>
       <label class="field inline"><span class="label">Talkativeness<span class="hint">0–1, how often they speak up in group chats</span></span><input data-draft-talk inputmode="decimal" value="${esc((d.extensions && d.extensions.talkativeness) ?? 0.5)}"></label>
+      ${S.settings.ext.tts.enabled ? `<div class="field"><span class="label">Voice <span class="hint">(text-to-speech)</span></span>
+        <div class="row"><input data-draft="ttsVoice" value="${esc(d.ttsVoice || '')}" placeholder="Default voice" autocapitalize="off"><button class="btn" data-action="voices-char">Pick</button></div></div>` : ''}
+      <div class="field"><span class="label">Expressions <span class="hint">(sprites named after emotions, e.g. joy.png, anger.png, neutral.png)</span></span>
+        <div class="sprite-grid" id="sprite-grid"></div>
+        <div class="row wrap"><button class="btn sm" data-action="sprites-add">${ICONS.plus} Add sprites</button><button class="btn sm danger" data-action="sprites-clear">Remove all</button></div></div>
       <label class="field"><span class="label">Persona for this character</span><select data-draft-persona>
         <option value="">No lock (use the current persona)</option>
         ${S.settings.personas.map((p) => `<option value="${p.id}" ${d.personaId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
@@ -1879,6 +2230,7 @@ async function renderEditView(id) {
       <button class="btn danger block" data-action="char-delete">${ICONS.trash} Delete character</button>`}
       <div class="bottom-space"></div>
     </main>`;
+  fillSpriteGrid(d.id);
 }
 
 function collectDraft() {
@@ -1946,6 +2298,73 @@ function setPath(path, value) {
   if (!obj) return;
   for (const k of rest.slice(0, -1)) obj = obj[k];
   obj[rest[rest.length - 1]] = value;
+}
+
+/** Settings for the built-in versions of ST's bundled extensions. Inputs use data-x="group.key". */
+function extSections() {
+  const e = S.settings.ext;
+  const tog = (path, label, hint = '') => { const [g, k] = path.split('.'); return `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" data-x-toggle="${path}" ${e[g][k] ? 'checked' : ''}><i></i></label>`; };
+  const txt = (path, label, hint = '', type = 'text', ph = '') => { const [g, k] = path.split('.'); return `<label class="field"><span class="label">${label}${hint ? ` <span class="hint">${hint}</span>` : ''}</span><input ${type === 'password' ? 'type="password" data-secret' : 'type="text"'} data-x="${path}" ${type === 'password' ? '' : `value="${esc(e[g][k] ?? '')}"`} placeholder="${esc(ph)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`; };
+  const sel = (path, label, opts) => { const [g, k] = path.split('.'); return `<label class="field inline"><span class="label">${label}</span><select data-x-select="${path}">${Object.entries(opts).map(([v, l]) => `<option value="${v}" ${String(e[g][k]) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`; };
+  return `
+    <h4 class="sub">📷 Images in chat</h4>
+    ${tog('vision.enabled', 'Attach photos', 'Adds a 🖼 button by the message box; photos go to vision models')}
+    ${e.vision.enabled ? txt('vision.maxImages', 'Images sent per request', '(newest first)') : ''}
+
+    <h4 class="sub">🎨 Image generation</h4>
+    ${tog('image.enabled', 'Enabled', '✨ → Generate image, or /imagine scene | char | me | your description')}
+    ${e.image.enabled ? `
+      ${sel('image.provider', 'Service', { openrouter: 'OpenRouter (image models)', openai: 'OpenAI-compatible', pollinations: 'Pollinations (free, no key)' })}
+      ${e.image.provider !== 'pollinations' ? txt('image.model', 'Model', '', 'text', e.image.provider === 'openrouter' ? 'google/gemini-2.5-flash-image' : 'gpt-image-1') : ''}
+      ${e.image.provider === 'openai' ? txt('image.baseUrl', 'Base URL', '', 'text', 'https://api.openai.com/v1') : ''}
+      ${e.image.provider !== 'pollinations' ? txt('image.apiKey', 'API key', e.image.provider === 'openrouter' ? '(blank = your OpenRouter connection)' : '', 'password') : ''}
+      ${sel('image.aspect', 'Shape', { '1:1': 'Square', '2:3': 'Portrait', '3:2': 'Landscape', '9:16': 'Tall', '16:9': 'Wide' })}
+      ${txt('image.style', 'Style', '(added to every prompt)', 'text', 'e.g. anime, soft lighting, detailed')}
+      ${txt('image.negative', 'Avoid', '', 'text', 'e.g. text, watermark, extra fingers')}
+      ${tog('image.writePrompt', 'Let the AI polish custom descriptions')}` : ''}
+
+    <h4 class="sub">🔊 Text-to-speech</h4>
+    ${tog('tts.enabled', 'Enabled', 'Adds “Speak” to messages')}
+    ${e.tts.enabled ? `
+      ${sel('tts.provider', 'Voices', { browser: 'Built-in (free, on device)', openai: 'OpenAI-compatible', elevenlabs: 'ElevenLabs' })}
+      ${e.tts.provider === 'openai' ? txt('tts.baseUrl', 'Base URL', '', 'text', 'https://api.openai.com/v1') + txt('tts.model', 'Model', '', 'text', 'gpt-4o-mini-tts') : ''}
+      ${e.tts.provider === 'elevenlabs' ? txt('tts.model', 'Model', '', 'text', 'eleven_multilingual_v2') : ''}
+      ${e.tts.provider !== 'browser' ? txt('tts.apiKey', 'API key', '', 'password') : ''}
+      <div class="field"><span class="label">Default voice</span><div class="row"><input data-x="tts.defaultVoice" value="${esc(e.tts.defaultVoice)}" autocapitalize="off"><button class="btn" data-action="voices-default">Pick</button></div></div>
+      <div class="field"><span class="label">Narrator voice</span><div class="row"><input data-x="tts.narratorVoice" value="${esc(e.tts.narratorVoice)}" autocapitalize="off"><button class="btn" data-action="voices-narrator">Pick</button></div></div>
+      ${txt('tts.rate', 'Speed', '(1 = normal)')}
+      ${tog('tts.auto', 'Read new replies automatically')}
+      ${tog('tts.dialogueOnly', 'Only read "dialogue"')}
+      ${tog('tts.skipActions', 'Skip *actions*')}
+      <button class="btn sm" data-action="tts-test">Test voice</button>
+      <p class="hint">Give each character their own voice in Edit character.</p>` : ''}
+
+    <h4 class="sub">🌐 Translation</h4>
+    ${tog('translate.enabled', 'Enabled', 'Uses your chat model (or the one below); adds “Translate” to messages')}
+    ${e.translate.enabled ? `
+      ${txt('translate.target', 'Translate replies into', '', 'text', 'English')}
+      ${tog('translate.auto', 'Translate new replies automatically', 'The AI still sees the original')}
+      ${tog('translate.input', 'Translate my messages before sending')}
+      ${e.translate.input ? txt('translate.inputTarget', 'Send my messages in', '', 'text', 'English') : ''}
+      ${txt('translate.model', 'Model', '(optional; blank = chat model)')}` : ''}
+
+    <h4 class="sub">🎭 Character expressions</h4>
+    ${tog('expressions.enabled', 'Enabled', 'Shows the speaker’s sprite above the chat, matched to the mood of the reply')}
+    ${e.expressions.enabled ? `
+      ${tog('expressions.auto', 'Detect the mood after each reply', 'One tiny extra request per reply')}
+      ${txt('expressions.model', 'Model', '(optional; a cheap fast one is ideal)')}
+      <p class="hint">Add sprites in Edit character (files named joy.png, anger.png, neutral.png…) — they also come over from a SillyTavern zip. Tap the sprite to shrink it.</p>` : ''}
+
+    <h4 class="sub">🔎 Chat recall <span class="muted small">(Vector Storage)</span></h4>
+    ${tog('recall.enabled', 'Enabled', 'Brings relevant older moments back into the prompt')}
+    ${e.recall.enabled ? `
+      ${sel('recall.mode', 'Matching', { keyword: 'Keywords (free, on device)', embeddings: 'Embeddings (OpenAI-compatible)' })}
+      ${e.recall.mode === 'embeddings' ? txt('recall.embBase', 'Embeddings URL', '', 'text', 'https://api.openai.com/v1') + txt('recall.embModel', 'Embeddings model', '', 'text', 'text-embedding-3-small') + txt('recall.embKey', 'API key', '', 'password') : ''}
+      ${txt('recall.topK', 'Moments to recall')}
+      ${txt('recall.skipRecent', 'Ignore the last N messages', '(they are already in the prompt)')}
+      ${txt('recall.depth', 'Insert at depth')}
+      ${txt('recall.minScore', 'Minimum match', '(0–1)')}` : ''}
+    <hr class="sep">`;
 }
 
 function renderSettingsView(open) {
@@ -2137,6 +2556,7 @@ function renderSettingsView(open) {
     <label class="field"><span class="label">Injection template</span><input data-ext-sum="template" value="${esc(sm.template)}"></label>
     <label class="field"><span class="label">Summary prompt</span><textarea data-ext-sum="prompt" rows="5">${esc(sm.prompt)}</textarea></label>
     <p class="hint">Edit or refresh a chat's summary from ✨ → Summary. Your preset can use it anywhere with {{summary}}.</p>
+    ${extSections()}
     <h4 class="sub">🧠 Layered memory <span class="muted small">(Summaryception)</span></h4>
     ${tog('data-ext-mem-toggle', 'enabled', mm.enabled, 'Enabled', 'Recent chat stays word-for-word; older chat becomes layered memories and is “ghosted” (still visible to you, not sent)')}
     <label class="field inline"><span class="label">Memory mode</span><select data-ext-mem-select="mode">
@@ -2215,6 +2635,10 @@ function renderSettingsView(open) {
     </main>`;
   const keyField = $('#api-key');
   if (keyField && conn) keyField.value = conn.apiKey || '';
+  document.querySelectorAll('input[data-secret][data-x]').forEach((el) => {
+    const [g, k] = el.dataset.x.split('.');
+    el.value = (S.settings.ext[g] && S.settings.ext[g][k]) || '';
+  });
   if (navigator.storage && navigator.storage.estimate) {
     navigator.storage.estimate().then(async (est) => {
       const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
@@ -2700,6 +3124,80 @@ const actions = {
   },
   'msg-regen': (el) => { if (!S.generating) { const m = findMsg(el.dataset.id); runGeneration('swipe', m && m.charId); } },
   'quick-actions': quickActions,
+  'qa-image': imageSheet,
+  'img-gen': (el) => {
+    const mode = el.dataset.mode;
+    const extra = mode === 'free' ? ($('#img-free') || {}).value || '' : '';
+    if (mode === 'free' && !extra.trim()) return toast('Describe the image first.');
+    closeSheet();
+    runImageGen(mode, extra.trim());
+  },
+  'view-image': (el) => {
+    const m = findMsg(el.dataset.id);
+    const src = m && m.images && m.images[+el.dataset.i];
+    if (!src || !X.isSafeImageSrc(src)) return;
+    openSheet(`<img class="img-full" src="${esc(src)}" alt="">${m.imagePrompt ? `<p class="hint">${esc(m.imagePrompt)}</p>` : ''}
+      <div class="row wrap"><button class="btn" data-action="save-image" data-id="${m.id}" data-i="${el.dataset.i}">${ICONS.download} Save image</button></div>`, 'tall');
+  },
+  'save-image': async (el) => {
+    const m = findMsg(el.dataset.id);
+    const src = m && m.images[+el.dataset.i];
+    if (!src) return;
+    const blob = await (await fetch(src)).blob();
+    await saveFile(blob, `${safeName(S.char.name)}-${Date.now()}.${blob.type.includes('png') ? 'png' : 'jpg'}`);
+  },
+  attach: async () => {
+    const files = await pickFile('file-images');
+    if (!files.length) return;
+    if (!S.pending || S.pending.chatId !== S.chat.id) S.pending = { chatId: S.chat.id, images: [] };
+    for (const f of files.slice(0, 4)) {
+      try { S.pending.images.push(await blobToAvatar(f, 1280)); } catch (e) { toast(e.message); }
+    }
+    renderAttachRow();
+  },
+  'attach-remove': (el) => { if (S.pending) S.pending.images.splice(+el.dataset.i, 1); renderAttachRow(); },
+  'msg-speak': (el) => { const m = findMsg(el.dataset.id); if (m) speakMessage(m); },
+  'msg-translate': async (el) => {
+    const m = findMsg(el.dataset.id);
+    if (!m) return;
+    S.openActions = null;
+    if (m.tr && m.tr[m.swipeIdx]) { m.showOriginal = !m.showOriginal; await saveChat(S.chat); renderMessages(); return; }
+    toast('Translating…', 15000);
+    await translateMessage(m);
+    toast('Translated', 1200);
+  },
+  'expr-toggle': () => { const c = S.settings.ext.expressions; c.collapsed = !c.collapsed; saveSettings(); updateExpressionPanel(); },
+  'pick-voice': async (el) => {
+    const target = el.dataset.target;
+    if (target === 'default' || target === 'narrator') {
+      S.settings.ext.tts[target === 'default' ? 'defaultVoice' : 'narratorVoice'] = el.dataset.id;
+      saveSettings(); closeSheet(); rerenderSettings();
+    } else if (S.draft) {
+      collectDraft(); S.draft.ttsVoice = el.dataset.id; closeSheet(); renderEditView(S.draft._for);
+    }
+  },
+  'voices-default': () => voicesSheet('default'),
+  'voices-narrator': () => voicesSheet('narrator'),
+  'voices-char': () => voicesSheet('char'),
+  'tts-test': () => speakMessage({ id: 'test', role: 'system', swipes: ['"Hello! This is how I sound."'], swipeIdx: 0 }),
+  'sprites-add': async () => {
+    const files = await pickFile('file-sprites');
+    if (!files.length) return;
+    collectDraft();
+    const sp = { ...(await spritesOf(S.draft.id)) };
+    for (const f of files) {
+      const label = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+      try { sp[label] = await blobToPng(f); } catch (e) { toast(`${f.name}: ${e.message}`); }
+    }
+    await saveSprites(S.draft.id, sp);
+    renderEditView(S.draft._for);
+  },
+  'sprites-clear': async () => {
+    if (!confirm('Remove all expression sprites for this character?')) return;
+    collectDraft();
+    await saveSprites(S.draft.id, {});
+    renderEditView(S.draft._for);
+  },
   'imp-done': () => { closeSheet(); if (route().name === 'home' || !location.hash || location.hash === '#/') renderHome(); else go('#/'); },
   enhance: () => { closeSheet(); enhanceDraft(); },
   'restore-draft': () => { closeSheet(); restoreDraft(); },
@@ -3193,6 +3691,11 @@ document.addEventListener('input', (e) => {
   } else if (el.dataset.extEnhance) {
     S.settings.ext.enhance[el.dataset.extEnhance] = el.value;
     saveSettings();
+  } else if (el.dataset.x) {
+    const [g, k] = el.dataset.x.split('.');
+    const numeric = ['maxImages', 'rate', 'topK', 'skipRecent', 'depth', 'minScore'].includes(k);
+    S.settings.ext[g][k] = numeric ? (numOrNull(el.value) ?? S.settings.ext[g][k]) : el.value;
+    saveSettings();
   } else if (el.dataset.extMem) {
     const k = el.dataset.extMem;
     const numeric = ['verbatim', 'queued', 'memoryBudget', 'depth'].includes(k);
@@ -3252,6 +3755,13 @@ document.addEventListener('change', (e) => {
   if (el.dataset.extEnhanceToggle) {
     S.settings.ext.enhance[el.dataset.extEnhanceToggle] = el.checked;
     saveSettings();
+    return;
+  }
+  if (el.dataset.xToggle || el.dataset.xSelect) {
+    const [g, k] = (el.dataset.xToggle || el.dataset.xSelect).split('.');
+    S.settings.ext[g][k] = el.dataset.xToggle ? el.checked : el.value;
+    saveSettings();
+    rerenderSettings();
     return;
   }
   if (el.dataset.extMemToggle) {
@@ -3391,6 +3901,9 @@ const ICONS = {
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
   users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3.2-5.5 7-5.5s7 2 7 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2.3.7 4 2.4 4 5.2"/>'),
   note: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>'),
+  image: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/>'),
+  speaker: svg('<path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>', 'width="18" height="18"'),
+  globe: svg('<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>', 'width="18" height="18"'),
   layers: svg('<path d="M12 2l10 5-10 5L2 7z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/>'),
   sliders: svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
   close: svg('<path d="M18 6L6 18M6 6l12 12"/>'),
@@ -3412,6 +3925,7 @@ async function boot() {
       enhance: { ...def.ext.enhance, ...((settings.ext || {}).enhance || {}) },
       summarize: { ...def.ext.summarize, ...((settings.ext || {}).summarize || {}) },
       memory: { ...def.ext.memory, ...((settings.ext || {}).memory || {}) },
+      ...Object.fromEntries(Object.keys(X.DEFAULT_EXT).map((k) => [k, { ...def.ext[k], ...((settings.ext || {})[k] || {}) }])),
     },
     appearance: { ...def.appearance, ...(settings.appearance || {}) },
   } : def;

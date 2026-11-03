@@ -116,7 +116,9 @@ async function* sseLines(resp, signal) {
 function openaiBody(conn, preset, messages) {
   const body = {
     model: conn.model,
-    messages,
+    messages: messages.map((m) => (Array.isArray(m.images) && m.images.length
+      ? { role: m.role, content: [{ type: 'text', text: m.content || ' ' }, ...m.images.map((url) => ({ type: 'image_url', image_url: { url } }))] }
+      : { role: m.role, content: m.content })),
     max_tokens: preset.max_tokens,
     temperature: preset.temperature,
     top_p: preset.top_p,
@@ -140,21 +142,41 @@ export function toAnthropic(messages) {
   const system = [];
   const out = [];
   let leading = true;
+  const blocksOf = (m) => {
+    const b = [];
+    // Images are only allowed in user turns.
+    if (Array.isArray(m.images) && m.role !== 'assistant') {
+      for (const url of m.images) {
+        const mm = String(url).match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/);
+        if (mm) b.push({ type: 'image', source: { type: 'base64', media_type: mm[1], data: mm[2] } });
+      }
+    }
+    if (m.content) b.push({ type: 'text', text: m.content });
+    return b;
+  };
   for (const m of messages) {
     if (m.role === 'system' && leading) { if (m.content) system.push(m.content); continue; }
     leading = false;
-    let role = m.role;
-    let content = m.content;
-    if (!content) continue;
-    if (role === 'system') role = 'user'; // like SillyTavern: later system prompts become user turns
+    const role = m.role === 'system' ? 'user' : m.role; // like SillyTavern: later system prompts become user turns
+    const blocks = blocksOf(m);
+    if (!blocks.length) continue;
     const last = out[out.length - 1];
-    if (last && last.role === role) last.content += '\n\n' + content;
-    else out.push({ role, content });
+    if (last && last.role === role) last.blocks.push(...blocks);
+    else out.push({ role, blocks });
   }
-  if (!out.length || out[0].role !== 'user') out.unshift({ role: 'user', content: '[Start of the chat]' });
+  if (!out.length || out[0].role !== 'user') out.unshift({ role: 'user', blocks: [{ type: 'text', text: '[Start of the chat]' }] });
   // Current Claude models don't allow assistant prefill, so the request must end on a user turn.
-  if (out[out.length - 1].role === 'assistant') out.push({ role: 'user', content: '[Continue]' });
-  return { system: system.join('\n\n'), messages: out };
+  if (out[out.length - 1].role === 'assistant') out.push({ role: 'user', blocks: [{ type: 'text', text: '[Continue]' }] });
+  const finish = ({ role, blocks }) => {
+    const merged = [];
+    for (const b of blocks) {
+      const prev = merged[merged.length - 1];
+      if (b.type === 'text' && prev && prev.type === 'text') prev.text += '\n\n' + b.text;
+      else merged.push({ ...b });
+    }
+    return { role, content: merged.every((b) => b.type === 'text') ? merged.map((b) => b.text).join('\n\n') : merged };
+  };
+  return { system: system.join('\n\n'), messages: out.map(finish) };
 }
 
 function anthropicBody(conn, preset, messages) {
@@ -282,4 +304,104 @@ export async function generate(conn, preset, messages, { signal, onToken, stop =
   const out = view();
   if (!out.text && !raw && stopReason === 'refusal') throw new Error('Claude declined to respond (refusal).');
   return out.text;
+}
+
+// ---------- image generation ----------
+/** Returns an image as a data: URL (or an https URL for Pollinations when it can't be fetched). */
+export async function generateImage(cfg, conn, prompt, { width = 1024, height = 1024, signal } = {}) {
+  const full = [cfg.style, prompt].filter((x) => x && x.trim()).join(', ');
+  if (cfg.provider === 'pollinations') {
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(full)}?width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 1e9)}${cfg.negative ? `&negative=${encodeURIComponent(cfg.negative)}` : ''}`;
+    try {
+      const r = await fetch(url, { signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await blobToDataUrl(await r.blob());
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      return url; // displayed directly; can't be embedded in exports
+    }
+  }
+  if (cfg.provider === 'openrouter') {
+    const key = cfg.apiKey || (conn && conn.provider === 'openrouter' ? conn.apiKey : '');
+    if (!key) throw new Error('Image generation needs an OpenRouter key (set it in Settings → Extensions → Image generation, or use an OpenRouter connection).');
+    const body = {
+      model: cfg.model || 'google/gemini-2.5-flash-image',
+      messages: [{ role: 'user', content: `Generate an image: ${full}${cfg.negative ? `\nAvoid: ${cfg.negative}` : ''}` }],
+      modalities: ['image', 'text'],
+      image_config: { aspect_ratio: cfg.aspect || '1:1' },
+    };
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST', signal,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'HTTP-Referer': location.origin, 'X-Title': 'PocketTavern' },
+      body: JSON.stringify(body),
+    }).catch((e) => { throw networkError(e, { provider: 'openrouter' }); });
+    if (!r.ok) throw await apiError(r);
+    const j = await r.json();
+    const msg = j.choices && j.choices[0] && j.choices[0].message;
+    const img = msg && Array.isArray(msg.images) && msg.images[0];
+    const url = img && ((img.image_url && img.image_url.url) || img.url);
+    if (!url) throw new Error(`The model didn't return an image${msg && msg.content ? `: ${String(msg.content).slice(0, 200)}` : ''}. Pick an image model (e.g. google/gemini-2.5-flash-image).`);
+    return url.startsWith('data:') ? url : blobToDataUrl(await (await fetch(url)).blob());
+  }
+  // OpenAI-compatible /images/generations
+  const base = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const body = { model: cfg.model || 'gpt-image-1', prompt: full, n: 1, size: `${width}x${height}` };
+  if (/dall-e/i.test(body.model)) body.response_format = 'b64_json';
+  const r = await fetch(`${base}/images/generations`, {
+    method: 'POST', signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` }, body: JSON.stringify(body),
+  }).catch((e) => { throw networkError(e, { provider: 'openai', baseUrl: base }); });
+  if (!r.ok) throw await apiError(r);
+  const j = await r.json();
+  const d = j.data && j.data[0];
+  if (d && d.b64_json) return `data:image/png;base64,${d.b64_json}`;
+  if (d && d.url) return blobToDataUrl(await (await fetch(d.url)).blob());
+  throw new Error('No image in the response');
+}
+
+export function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
+// ---------- text to speech ----------
+export async function ttsAudio(cfg, text, voice, signal) {
+  if (cfg.provider === 'elevenlabs') {
+    if (!voice) throw new Error('Pick an ElevenLabs voice first.');
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_128`, {
+      method: 'POST', signal, headers: { 'content-type': 'application/json', 'xi-api-key': cfg.apiKey },
+      body: JSON.stringify({ text, model_id: cfg.model && /eleven/i.test(cfg.model) ? cfg.model : 'eleven_multilingual_v2' }),
+    });
+    if (!r.ok) throw await apiError(r);
+    return r.blob();
+  }
+  const base = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const r = await fetch(`${base}/audio/speech`, {
+    method: 'POST', signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
+    body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini-tts', voice: voice || 'alloy', input: text, speed: Number(cfg.rate) || 1 }),
+  });
+  if (!r.ok) throw await apiError(r);
+  return r.blob();
+}
+
+export async function listElevenVoices(apiKey) {
+  const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': apiKey } });
+  if (!r.ok) throw await apiError(r);
+  const j = await r.json();
+  return (j.voices || []).map((v) => ({ id: v.voice_id, name: v.name }));
+}
+
+// ---------- embeddings (chat recall) ----------
+export async function embed(cfg, inputs) {
+  const base = (cfg.embBase || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const r = await fetch(`${base}/embeddings`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.embKey}` },
+    body: JSON.stringify({ model: cfg.embModel || 'text-embedding-3-small', input: inputs }),
+  });
+  if (!r.ok) throw await apiError(r);
+  const j = await r.json();
+  return (j.data || []).sort((a, b) => a.index - b.index).map((d) => d.embedding);
 }

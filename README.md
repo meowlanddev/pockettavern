@@ -22,6 +22,9 @@ requests go straight from your phone to the AI provider.
 - **Reasoning display**: collapsible thought process from reasoning models (OpenRouter, Claude 4.6+)
 - Quick preset switcher inside chats
 - **Built-in extensions**: ✨ Enhance My Reply (port of [Enhanced-Replies](https://github.com/setsuna1313/Enhanced-Replies)) and Summarize
+- Built-in versions of ST's bundled extensions: **images in chat** (vision), **image generation** (OpenRouter image models,
+  OpenAI-compatible, Pollinations; `/imagine`), **text-to-speech** (device voices, OpenAI-compatible, ElevenLabs; per-character voices),
+  **translation** (via your model), **character expressions** (sprites; imported from ST), **chat recall** (keyword BM25 or embeddings)
 - **Quick Replies** (import ST quick reply sets) and a practical subset of **STscript** slash commands
 - Lorebook **timed effects**: sticky, cooldown, delay
 - **Layered memory** inspired by [Summaryception](https://github.com/vadash/Extension-Summaryception): verbatim window, Layer 0 summaries,
