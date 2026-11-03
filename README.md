@@ -24,6 +24,10 @@ requests go straight from your phone to the AI provider.
 - **Built-in extensions**: ✨ Enhance My Reply (port of [Enhanced-Replies](https://github.com/setsuna1313/Enhanced-Replies)) and Summarize
 - **Quick Replies** (import ST quick reply sets) and a practical subset of **STscript** slash commands
 - Lorebook **timed effects**: sticky, cooldown, delay
+- **Layered memory** inspired by [Summaryception](https://github.com/vadash/Extension-Summaryception): verbatim window, Layer 0 summaries,
+  deeper merged layers, ghosted messages, `{{summaryception_memory}}`, optional Continuity Auditor (scene, bonds/gates, agendas, secrets)
+- **Appearance**: color themes, chat styles named after [Moonlit Echoes](https://github.com/RivelleDays/SillyTavern-MoonlitEchoesTheme)
+  (Flat, Document, Echo, Whisper, Hush, Ripple, Tide), avatar shapes, background image, custom CSS; imports ST UI themes and Moonlit presets
 - Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API)
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 

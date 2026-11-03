@@ -9,8 +9,10 @@ import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS }
 import { formatMessage, renderInto } from './render.js';
 import { runScript } from './stscript.js';
 import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
+import * as MEM from './memory.js';
+import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -31,7 +33,8 @@ function defaultSettings() {
     personas: [{ id: pid, name: 'User', description: '', avatar: null }],
     activePersona: pid,
     ui: { enterSends: false, fontSize: 16 },
-    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS } },
+    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS } },
+    appearance: structuredClone(DEFAULT_APPEARANCE),
   };
 }
 
@@ -137,7 +140,156 @@ function promptFor(chat, char, history, opts = {}) {
     model: conn && conn.model, embeddedEntries: char._embedded || embeddedEntries(char),
     mode: opts.mode || 'normal', group, quietPrompt: opts.quietPrompt || '',
     summary: summaryFor(chat), timed: structuredClone(chat.wiTimed || {}),
+    memory: memoryFor(chat), continuity: continuityFor(chat),
   });
+}
+
+// ---------- long-term memory (Summaryception-style) ----------
+function memoryFor(chat) {
+  const cfg = S.settings.ext.memory;
+  const text = MEM.assembleMemory(chat.mem);
+  if (!text) return null;
+  return { text, position: cfg.enabled ? cfg.position : 'macro', depth: cfg.depth, role: cfg.role, template: cfg.template };
+}
+
+/** Newest audited checkpoint for the visible swipes, and how many replies it lags behind. */
+function liveContinuity(chat) {
+  let stale = 0;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const m = chat.messages[i];
+    if (m.role !== 'assistant') continue;
+    if (m.audit && m.audit.swipe === m.swipeIdx) return { msg: m, state: m.audit.state, stale };
+    stale++;
+  }
+  return null;
+}
+
+function continuityFor(chat) {
+  const cfg = S.settings.ext.memory;
+  if (!cfg.enabled || !cfg.auditor || chat.groupId) return '';
+  const live = liveContinuity(chat);
+  return live ? MEM.renderContinuity(live.state, live.stale) : '';
+}
+
+const connFor = (model) => { const c = activeConn(); return c && model ? { ...c, model } : c; };
+const memNameOf = (m) => (m.role === 'user' ? (activePersona().name || 'User') : m.role === 'system' ? 'Narrator' : ((speakerOf(m) || S.char || {}).name || m.name || 'Character'));
+
+async function memCall(system, user, maxTokens, model) {
+  const conn = connFor(model);
+  if (!conn || !conn.model) throw new Error('No API connection.');
+  const preset = { ...S.settings.preset, stream: false, max_tokens: maxTokens };
+  return generate(conn, preset, [{ role: 'system', content: system }, { role: 'user', content: user }]);
+}
+
+/** Compress old chat into Layer 0 memories, then merge crowded layers. mode: auto | force | slop */
+async function runMemory(chat, mode = 'auto') {
+  const cfg = S.settings.ext.memory;
+  if ((!cfg.enabled && mode === 'auto') || S.memBusy) return;
+  const chunks = MEM.planChunks(chat.messages, cfg, mode);
+  const needsMerge = () => chat.mem && MEM.nextPromotion(chat.mem.layers, cfg);
+  if (!chunks.length && !needsMerge()) { if (mode !== 'auto') toast('Nothing old enough to summarize yet.'); return; }
+  S.memBusy = true;
+  const env = { char: (S.char || {}).name, user: activePersona().name || 'User', vars: {} };
+  const fill = (t) => evaluateMacros(String(t).replace(/\{\{target\}\}/gi, String(cfg.target || 280)), env);
+  if (mode !== 'auto') toast(`Summarizing ${chunks.length} part${chunks.length === 1 ? '' : 's'}…`, 30000);
+  try {
+    chat.mem = chat.mem || { layers: [[]] };
+    for (const chunk of chunks) {
+      const recent = (chat.mem.layers[0] || []).slice(-3).map((x) => x.text).join('\n\n');
+      const user = `${recent ? `<earlier_memories>\n${recent}\n</earlier_memories>\n\n` : ''}<passage>\n${MEM.passageText(chunk, memNameOf)}\n</passage>`;
+      const text = MEM.extractNarrative(await memCall(fill(cfg.l0Prompt), user, Math.round((cfg.target || 280) * 3) + 300, cfg.model));
+      if (!text) throw new Error('The summarizer returned nothing.');
+      chunk.forEach((m) => { m.ghost = 'mem'; });
+      chat.mem.layers[0].push({ text, from: chunk[0].id, to: chunk[chunk.length - 1].id, at: Date.now() });
+      await saveChat(chat);
+      if (S.chat === chat) renderMessages();
+    }
+    for (let guard = 0; guard < 8; guard++) {
+      const plan = MEM.nextPromotion(chat.mem.layers, cfg);
+      if (!plan) break;
+      const items = chat.mem.layers[plan.layer].slice(0, plan.count);
+      const user = items.map((x, i) => `<memory n="${i + 1}">\n${x.text}\n</memory>`).join('\n');
+      const text = MEM.extractNarrative(await memCall(fill(cfg.mergePrompt), user, Math.round((cfg.target || 280) * 4) + 300, cfg.model));
+      if (!text) break;
+      chat.mem.layers[plan.layer].splice(0, plan.count);
+      (chat.mem.layers[plan.layer + 1] = chat.mem.layers[plan.layer + 1] || []).push({ text, from: items[0].from, to: items[items.length - 1].to, at: Date.now() });
+      await saveChat(chat);
+    }
+    if (mode !== 'auto') toast('Memory updated', 2500);
+  } catch (e) {
+    toast('Memory: ' + (e.message || e), 6000);
+  } finally {
+    S.memBusy = false;
+    if ($('#mem-sheet')) memorySheet();
+  }
+}
+
+function clearMemory(chat) {
+  chat.messages.forEach((m) => { if (m.ghost === 'mem') delete m.ghost; });
+  chat.mem = null;
+  saveChat(chat);
+  if (S.chat === chat) renderMessages();
+}
+
+/** Continuity Auditor: after each reply in a 1:1 chat, update the live scene/bond/agenda state. */
+async function runAuditor(chat, msg) {
+  const cfg = S.settings.ext.memory;
+  if (!cfg.enabled || !cfg.auditor || chat.groupId || msg.role !== 'assistant') return;
+  const idx = chat.messages.indexOf(msg);
+  const prior = (() => { for (let i = idx - 1; i >= 0; i--) { const m = chat.messages[i]; if (m.role === 'assistant' && m.audit && m.audit.swipe === m.swipeIdx) return m.audit.state; } return null; })();
+  const lastUser = [...chat.messages.slice(0, idx)].reverse().find((m) => m.role === 'user');
+  const exchange = [lastUser, msg].filter(Boolean).map((m) => `${memNameOf(m)}: ${m.swipes[m.swipeIdx]}`).join('\n\n');
+  const priorView = prior ? { bonds: Object.keys(prior.bonds || {}), agendas: prior.agendas, gm_notes: prior.notes, physics: prior.physics } : {};
+  const swipe = msg.swipeIdx;
+  try {
+    const out = await memCall(evaluateMacros(cfg.auditorPrompt, { char: S.char.name, user: activePersona().name || 'User', vars: {} }),
+      `<prior_continuity_state>\n${JSON.stringify(priorView, null, 1)}\n</prior_continuity_state>\n\n<latest_exchange>\n${exchange}\n</latest_exchange>`, 1500, cfg.auditorModel || cfg.model);
+    if (msg.swipeIdx !== swipe) return; // user swiped meanwhile
+    msg.audit = { swipe, state: MEM.nextContinuityState(prior, out) };
+    await saveChat(chat);
+    if (S.chat === chat) renderMessages();
+  } catch (e) {
+    console.warn('Auditor failed', e);
+    toast('Continuity auditor: ' + (e.message || e), 5000);
+  }
+}
+
+function memorySheet() {
+  const cfg = S.settings.ext.memory;
+  const chat = S.chat;
+  const layers = (chat.mem && chat.mem.layers) || [];
+  const ghosted = chat.messages.filter((m) => m.ghost).length;
+  const live = chat.messages.filter((m) => !m.ghost).reduce((n, m) => n + MEM.estTokens(m.swipes[m.swipeIdx]), 0);
+  const memText = MEM.assembleMemory(chat.mem);
+  const cont = !chat.groupId && liveContinuity(chat);
+  openSheet(`
+    <div class="sheet-title" id="mem-sheet">Memory ${S.memBusy ? '<span class="muted small">· working…</span>' : ''}</div>
+    ${cfg.enabled ? '' : '<p class="hint">Layered memory is off — turn it on in Settings → Extensions.</p>'}
+    <div class="mem-stats">
+      <div><b>${ghosted}</b>messages in memory</div>
+      <div><b>≈${Math.round(live / 1000)}k</b>verbatim tokens</div>
+      <div><b>${layers.map((l) => (l || []).length).join(' / ') || '0'}</b>memories per layer</div>
+    </div>
+    <div class="row wrap">
+      <button class="btn" data-action="mem-force">Force summarize</button>
+      <button class="btn" data-action="mem-slop" title="Summarize everything but the last two exchanges">Slop breaker</button>
+      <button class="btn danger" data-action="mem-clear">Clear</button>
+    </div>
+    <h3 class="sheet-sub">Injected memory</h3>
+    <div class="pv"><pre>${esc(memText || 'Nothing yet.')}</pre></div>
+    ${cont ? `<h3 class="sheet-sub">Continuity (live state)</h3><div class="pv"><pre>${esc(MEM.renderContinuity(cont.state, cont.stale).replace(/\{\{user\}\}/g, activePersona().name || 'User'))}</pre></div>` : ''}
+  `, 'tall');
+}
+
+/** Per-speaker avatar URLs as CSS variables, used by the portrait chat styles. */
+function avatarCss() {
+  const rules = [];
+  const add = (id, src) => { const a = safeAvatar(src); if (a) rules.push(`.msg[data-sp="${id}"]{--av:url("${a}")}`); };
+  add('user', activePersona().avatar);
+  if (S.group) groupMembers().forEach((c) => add(c.id, c.avatar)); else if (S.char) add(S.char.id, S.char.avatar);
+  let el = document.getElementById('av-css');
+  if (!el) { el = document.createElement('style'); el.id = 'av-css'; document.head.appendChild(el); }
+  el.textContent = rules.join('\n');
 }
 
 function summaryFor(chat) {
@@ -306,6 +458,22 @@ function scriptApi(chat) {
       S.settings.activePreset = p ? p.id : null;
       if (p) applyPresetSamplers(p);
       saveSettings();
+    },
+    custom: {
+      'sc-status': () => {
+        const layers = (chat.mem && chat.mem.layers) || [];
+        const t = `Memory: ${chat.messages.filter((m) => m.ghost).length} messages ghosted; memories per layer ${layers.map((l) => l.length).join('/') || 0}.`;
+        toast(t, 5000);
+        return t;
+      },
+      'sc-preview': () => { if (S.chat === chat) memorySheet(); return MEM.assembleMemory(chat.mem); },
+      'sc-clear': () => { clearMemory(chat); toast('Memory cleared for this chat'); },
+      chatstyle: (arg) => {
+        const v = String(arg || '').trim().toLowerCase().replace(/style$/, '');
+        if (!CHAT_STYLES[v]) throw new Error(`Chat styles: ${Object.keys(CHAT_STYLES).join(', ')}`);
+        S.settings.appearance.chatStyle = v; saveSettings(); applyAppearance(S.settings.appearance);
+      },
+      ...Object.fromEntries(Object.keys(CHAT_STYLES).map((k) => [`${k}style`, () => { S.settings.appearance.chatStyle = k; saveSettings(); applyAppearance(S.settings.appearance); }])),
     },
     persona: (name) => {
       const p = S.settings.personas.find((x) => x.name.toLowerCase() === String(name).trim().toLowerCase());
@@ -586,6 +754,19 @@ async function importFiles() {
           done.regex += list.length;
           continue;
         }
+        const theme = importThemeFile(json, base);
+        if (theme) {
+          const a = S.settings.appearance;
+          const t = { id: db.uid(), name: String(theme.name).replace(/^\[Moonlit\]\s*/, '').slice(0, 40), colors: { ...paletteOf({ theme: 'midnight', colors: {} }), ...theme.colors } };
+          a.saved = [...(a.saved || []), t];
+          a.theme = t.id; a.colors = {};
+          if (theme.chatStyle) a.chatStyle = theme.chatStyle;
+          if (theme.avatarShape) a.avatarShape = theme.avatarShape;
+          applyAppearance(a);
+          saveSettings();
+          done.themes = (done.themes || 0) + 1;
+          continue;
+        }
         if (Array.isArray(json.qrList)) {
           S.qr.push({ id: db.uid(), name: json.name || base, visible: true, buttons: json.qrList.map((q) => ({ id: db.uid(), label: String(q.label || q.title || 'QR'), title: String(q.title || ''), message: String(q.message || '') })) });
           done.qr = (done.qr || 0) + 1;
@@ -620,6 +801,7 @@ async function importFiles() {
   if (done.books) parts.push(`${done.books} lorebook${done.books > 1 ? 's' : ''}`);
   if (done.regex) parts.push(`${done.regex} regex script${done.regex > 1 ? 's' : ''}`);
   if (done.qr) parts.push(`${done.qr} quick reply set${done.qr > 1 ? 's' : ''}`);
+  if (done.themes) parts.push(`${done.themes} theme${done.themes > 1 ? 's' : ''} (applied)`);
   if (!parts.length) return;
   if (lastPreset && confirm(`Use preset "${lastPreset.name}" now?\n\nThis also applies its generation settings (max tokens, context size, temperature…).`)) {
     S.settings.activePreset = lastPreset.id;
@@ -853,10 +1035,13 @@ function msgHtml(msg, isLast) {
       <button data-action="msg-branch" data-id="${msg.id}">${ICONS.branch}<span>Branch</span></button>
       <button class="danger" data-action="msg-delete" data-id="${msg.id}">${ICONS.trash}<span>Delete</span></button>
     </div>` : '';
-  return `<div class="msg ${isUser ? 'user' : msg.role === 'system' ? 'sys' : 'char'}" data-id="${msg.id}">
+  const sp = isUser ? 'user' : (speaker && speaker.id) || '';
+  const live = msg.audit && msg.audit.swipe === msg.swipeIdx;
+  const isLiveAudit = live && S.liveAuditId === msg.id;
+  return `<div class="msg ${isUser ? 'user' : msg.role === 'system' ? 'sys' : 'char'}${msg.ghost ? ' ghost' : ''}" data-id="${msg.id}" data-sp="${esc(sp)}"${avatar ? '' : ' data-noav'}>
       ${avatarHtml(avatar, name, 'av sm')}
       <div class="bubble" data-action="toggle-msg" data-id="${msg.id}">
-        <div class="name">${esc(name)}</div>
+        <div class="name">${esc(name)}${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>
         ${reasoning && !editing ? reasoningHtml(reasoning, generatingThis && !raw) : ''}
         ${body}
         ${swipes}
@@ -892,6 +1077,9 @@ function renderMessages(scrollBottom = false) {
   if (!box) return;
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   const msgs = S.chat.messages;
+  const lc = liveContinuity(S.chat);
+  S.liveAuditId = lc ? lc.msg.id : null;
+  avatarCss();
   box.innerHTML = msgs.length
     ? msgs.map((m, i) => msgHtml(m, i === msgs.length - 1)).join('')
     : `<div class="empty muted">Say hello to ${esc(S.char.name)}.</div>`;
@@ -1062,6 +1250,7 @@ async function runGeneration(mode, speakerId) {
     S.stopGroup = true;
   } else if (msg.swipes[idx] && msg.swipes[idx].trim()) {
     maybeSummarize(chat);
+    runAuditor(chat, msg).then(() => runMemory(chat, 'auto'));
   }
 }
 
@@ -1190,6 +1379,7 @@ function quickActions() {
       ${S.settings.ext.enhance.enabled ? `<button data-action="enhance">✨<span>Enhance draft</span></button>` : ''}
       ${S.enhanceOriginal && S.enhanceOriginal.chatId === S.chat.id ? `<button data-action="restore-draft">${ICONS.back}<span>Restore draft</span></button>` : ''}
       <button data-action="qa-summary">${ICONS.note}<span>Summary${S.chat.summary && S.chat.summary.text ? ' •' : ''}</span></button>
+      ${S.settings.ext.memory.enabled || S.chat.mem ? `<button data-action="qa-memory">${ICONS.layers}<span>Memory</span></button>` : ''}
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
       ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
     </div>
@@ -1528,6 +1718,41 @@ function renderSettingsView(open) {
     ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}`;
 
   const en = S.settings.ext.enhance;
+  const mm = S.settings.ext.memory;
+  const ap = S.settings.appearance;
+  const pal = paletteOf(ap);
+  const apBody = `
+    <label class="field"><span class="label">Theme</span><select data-ap-select="theme">
+      ${Object.entries(THEMES).map(([k, t]) => `<option value="${k}" ${ap.theme === k ? 'selected' : ''}>${t.name}</option>`).join('')}
+      ${(ap.saved || []).map((t) => `<option value="${t.id}" ${ap.theme === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+    </select></label>
+    <span class="label">Chat style</span>
+    <div class="style-grid">
+      ${Object.entries(CHAT_STYLES).map(([k, v]) => `<button class="${ap.chatStyle === k ? 'on' : ''}" data-action="ap-style" data-v="${k}"><b>${v.label}</b><span>${v.hint}</span></button>`).join('')}
+    </div>
+    <label class="field inline"><span class="label">Avatar shape</span><select data-ap-select="avatarShape">
+      ${Object.entries(AVATAR_SHAPES).map(([k, v]) => `<option value="${k}" ${ap.avatarShape === k ? 'selected' : ''}>${v}</option>`).join('')}
+    </select></label>
+    <details class="section"><summary>Colors</summary><div class="sec-body">
+      ${COLOR_FIELDS.map(([k, label]) => `<div class="color-row"><span class="swatch" style="background:${esc(pal[k])}"></span><span class="label">${label}</span>
+        <input type="text" data-ap-color="${k}" value="${esc((ap.colors || {})[k] || '')}" placeholder="${esc(pal[k])}" autocapitalize="off" spellcheck="false"></div>`).join('')}
+      <p class="hint">Any CSS color: #hex, rgb(), rgba() with transparency…</p>
+      <button class="btn sm" data-action="ap-reset-colors">Reset to theme colors</button>
+    </div></details>
+    <div class="field"><span class="label">Background image</span>
+      <div class="row wrap"><button class="btn sm" data-action="ap-bg">${ap.bgImage ? 'Change' : 'Choose'} image</button>${ap.bgImage ? '<button class="btn sm danger" data-action="ap-bg-remove">Remove</button>' : ''}</div></div>
+    ${ap.bgImage ? `<label class="field inline"><span class="label">Darken<span class="hint">0–1</span></span><input inputmode="decimal" data-ap-num="bgDim" value="${ap.bgDim}"></label>
+      <label class="field inline"><span class="label">Blur<span class="hint">px</span></span><input inputmode="numeric" data-ap-num="bgBlur" value="${ap.bgBlur}"></label>` : ''}
+    <details class="section"><summary>Custom CSS</summary><div class="sec-body">
+      <textarea data-ap-css rows="6" spellcheck="false" placeholder=".bubble { border-radius: 4px; }">${esc(ap.customCss || '')}</textarea>
+    </div></details>
+    <div class="row wrap">
+      <button class="btn" data-action="ap-save">Save as theme</button>
+      <button class="btn" data-action="ap-export">${ICONS.download} Export</button>
+      <button class="btn" data-action="import-files">${ICONS.import} Import theme</button>
+      ${(ap.saved || []).some((t) => t.id === ap.theme) ? `<button class="btn danger" data-action="ap-delete">${ICONS.trash} Delete theme</button>` : ''}
+    </div>
+    <p class="hint">Imports SillyTavern UI themes and Moonlit Echoes presets (e.g. “[Moonlit] Glimmer”). Exports load in SillyTavern too. Chat styles also switch with /echostyle, /whisperstyle… or /chatstyle name.</p>`;
   const sm = S.settings.ext.summarize;
   const tog = (attr, key, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" ${attr}="${key}" ${on ? 'checked' : ''}><i></i></label>`;
   const extBody = `
@@ -1548,6 +1773,29 @@ function renderSettingsView(open) {
     <label class="field"><span class="label">Injection template</span><input data-ext-sum="template" value="${esc(sm.template)}"></label>
     <label class="field"><span class="label">Summary prompt</span><textarea data-ext-sum="prompt" rows="5">${esc(sm.prompt)}</textarea></label>
     <p class="hint">Edit or refresh a chat's summary from ✨ → Summary. Your preset can use it anywhere with {{summary}}.</p>
+    <h4 class="sub">🧠 Layered memory <span class="muted small">(Summaryception)</span></h4>
+    ${tog('data-ext-mem-toggle', 'enabled', mm.enabled, 'Enabled', 'Recent chat stays word-for-word; older chat becomes layered memories and is “ghosted” (still visible to you, not sent)')}
+    <label class="field inline"><span class="label">Memory mode</span><select data-ext-mem-select="mode">
+      ${Object.entries(MEM.MEMORY_MODES).map(([k, v]) => `<option value="${k}" ${mm.mode === k ? 'selected' : ''}>${v.label}${v.verbatim ? ` (${v.verbatim / 1000}k + ${v.queued / 1000}k)` : ''}</option>`).join('')}
+    </select></label>
+    ${mm.mode === 'custom' ? `
+      <label class="field inline"><span class="label">Verbatim tokens</span><input inputmode="numeric" data-ext-mem="verbatim" value="${mm.verbatim}"></label>
+      <label class="field inline"><span class="label">Queued tokens<span class="hint">overflow before summarizing</span></span><input inputmode="numeric" data-ext-mem="queued" value="${mm.queued}"></label>` : ''}
+    <label class="field inline"><span class="label">Memory budget<span class="hint">tokens of injected memory</span></span><input inputmode="numeric" data-ext-mem="memoryBudget" value="${mm.memoryBudget}"></label>
+    <label class="field inline"><span class="label">Insert memory</span><select data-ext-mem-select="position">
+      ${[['before', 'Before the prompt'], ['prompt', 'After the main prompt'], ['chat', 'In chat @ depth'], ['macro', 'Only via {{summaryception_memory}}']].map(([k, v]) => `<option value="${k}" ${mm.position === k ? 'selected' : ''}>${v}</option>`).join('')}
+    </select></label>
+    ${mm.position === 'chat' ? `<label class="field inline"><span class="label">Depth</span><input inputmode="numeric" data-ext-mem="depth" value="${mm.depth}"></label>` : ''}
+    <label class="field"><span class="label">Summarizer model <span class="hint">(optional, same connection; blank = chat model)</span></span><input data-ext-mem="model" value="${esc(mm.model)}" placeholder="e.g. a cheaper, fast model" autocapitalize="off"></label>
+    ${tog('data-ext-mem-toggle', 'auditor', mm.auditor, 'Continuity Auditor', 'After each reply (1:1 chats), tracks scene, bonds (sparks/grudge → hug, handhold, kiss…), agendas and secrets in an <active_continuity> block')}
+    ${mm.auditor ? `<label class="field"><span class="label">Auditor model <span class="hint">(optional; a fast one is best)</span></span><input data-ext-mem="auditorModel" value="${esc(mm.auditorModel)}" autocapitalize="off"></label>` : ''}
+    <details class="section"><summary>Memory prompts</summary><div class="sec-body">
+      <label class="field"><span class="label">Layer 0 summary</span><textarea data-ext-mem="l0Prompt" rows="7">${esc(mm.l0Prompt)}</textarea></label>
+      <label class="field"><span class="label">Merge (deeper layers)</span><textarea data-ext-mem="mergePrompt" rows="6">${esc(mm.mergePrompt)}</textarea></label>
+      <label class="field"><span class="label">Continuity auditor</span><textarea data-ext-mem="auditorPrompt" rows="8">${esc(mm.auditorPrompt)}</textarea></label>
+      <button class="btn sm" data-action="mem-reset-prompts">Reset prompts</button>
+    </div></details>
+    <p class="hint">Manage a chat's memory from ✨ → Memory, or with /sc-status, /sc-preview, /sc-clear.</p>
     <p class="hint">Other SillyTavern extensions can't be installed directly (they run code inside SillyTavern itself), but popular ones can be rebuilt here — ask!</p>`;
 
   const qrBody = `
@@ -1591,6 +1839,7 @@ function renderSettingsView(open) {
       ${sec('qr', 'Quick replies', qrBody)}
       ${sec('ext', 'Extensions', extBody)}
       ${sec('prompt', 'Prompts (Simple preset)', promptBody)}
+      ${sec('appearance', 'Appearance', apBody)}
       ${sec('ui', 'Interface', uiBody)}
       ${sec('data', 'Data & backup', dataBody)}
       <p class="muted small center">PocketTavern ${VERSION}</p>
@@ -1989,6 +2238,9 @@ async function importBackup() {
       const keep = new Map(S.settings.connections.map((c) => [c.id, c.apiKey]));
       S.settings = { ...defaultSettings(), ...data.settings };
       S.settings.connections.forEach((c) => { if (!c.apiKey && keep.get(c.id)) c.apiKey = keep.get(c.id); });
+      S.settings.appearance = { ...structuredClone(DEFAULT_APPEARANCE), ...(S.settings.appearance || {}) };
+      S.settings.ext = { ...defaultSettings().ext, ...(S.settings.ext || {}) };
+      applyAppearance(S.settings.appearance);
       await saveSettings(true);
     }
     toast('Backup restored');
@@ -2039,6 +2291,47 @@ const actions = {
   enhance: () => { closeSheet(); enhanceDraft(); },
   'restore-draft': () => { closeSheet(); restoreDraft(); },
   'qa-summary': summarySheet,
+  'qa-memory': memorySheet,
+  'mem-force': () => { runMemory(S.chat, 'force'); memorySheet(); },
+  'mem-slop': () => { runMemory(S.chat, 'slop'); memorySheet(); },
+  'mem-clear': () => { if (confirm('Clear long-term memory for this chat? Ghosted messages are sent to the AI again. No messages are deleted.')) { clearMemory(S.chat); memorySheet(); } },
+  'mem-reset-prompts': () => {
+    const m = S.settings.ext.memory;
+    m.l0Prompt = MEM.DEFAULT_L0_PROMPT; m.mergePrompt = MEM.DEFAULT_MERGE_PROMPT; m.auditorPrompt = MEM.DEFAULT_AUDITOR_PROMPT;
+    saveSettings(); rerenderSettings();
+  },
+  'ap-style': (el) => { S.settings.appearance.chatStyle = el.dataset.v; saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings(); },
+  'ap-bg': async () => {
+    const [f] = await pickFile('file-avatar');
+    if (!f) return;
+    S.settings.appearance.bgImage = await blobToAvatar(f, 1600);
+    saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings();
+  },
+  'ap-bg-remove': () => { S.settings.appearance.bgImage = null; saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings(); },
+  'ap-reset-colors': () => { S.settings.appearance.colors = {}; saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings(); },
+  'ap-save': () => {
+    const name = prompt('Name for this theme', 'My theme');
+    if (!name) return;
+    const a = S.settings.appearance;
+    const t = { id: db.uid(), name: name.trim().slice(0, 40), colors: paletteOf(a) };
+    a.saved = [...(a.saved || []), t];
+    a.theme = t.id; a.colors = {};
+    saveSettings(); applyAppearance(a); rerenderSettings();
+  },
+  'ap-delete': () => {
+    const a = S.settings.appearance;
+    const t = (a.saved || []).find((x) => x.id === a.theme);
+    if (!t || !confirm(`Delete theme "${t.name}"?`)) return;
+    a.saved = a.saved.filter((x) => x.id !== t.id);
+    a.theme = 'midnight';
+    saveSettings(); applyAppearance(a); rerenderSettings();
+  },
+  'ap-export': async () => {
+    const a = S.settings.appearance;
+    const t = (a.saved || []).find((x) => x.id === a.theme);
+    const name = t ? t.name : (THEMES[a.theme] || {}).name || 'PocketTavern theme';
+    await saveFile(new Blob([JSON.stringify(exportTheme(a, name), null, 2)], { type: 'application/json' }), `${safeName(name)}.json`);
+  },
   'summary-now': () => summarizeChat(S.chat),
   'summary-save': async () => {
     const text = $('#summary-text').value.trim();
@@ -2162,6 +2455,7 @@ const actions = {
     const chat = {
       id: db.uid(), charId: S.char.id, ...(S.chat.groupId ? { groupId: S.chat.groupId } : {}), title: `Branch of ${S.chat.title}`.slice(0, 60), createdAt: now, updatedAt: now,
       messages: structuredClone(S.chat.messages.slice(0, i + 1)).map((m) => ({ ...m, id: db.uid() })),
+      ...(S.chat.mem ? { mem: structuredClone(S.chat.mem) } : {}),
     };
     await saveChat(chat);
     toast('Branched into a new chat');
@@ -2424,6 +2718,7 @@ const actions = {
     await db.clear('characters'); await db.clear('chats'); await db.clear('kv');
     S.presets = []; S.lorebooks = []; S.regex = []; S.groups = []; S.qr = [];
     S.settings = defaultSettings();
+    applyAppearance(S.settings.appearance);
     await saveSettings(true);
     go('#/');
   },
@@ -2484,6 +2779,26 @@ document.addEventListener('input', (e) => {
   } else if (el.dataset.extEnhance) {
     S.settings.ext.enhance[el.dataset.extEnhance] = el.value;
     saveSettings();
+  } else if (el.dataset.extMem) {
+    const k = el.dataset.extMem;
+    const numeric = ['verbatim', 'queued', 'memoryBudget', 'depth'].includes(k);
+    S.settings.ext.memory[k] = numeric ? (numOrNull(el.value) ?? S.settings.ext.memory[k]) : el.value;
+    saveSettings();
+  } else if (el.dataset.apColor) {
+    const a = S.settings.appearance;
+    a.colors = { ...(a.colors || {}) };
+    if (el.value.trim()) a.colors[el.dataset.apColor] = el.value.trim(); else delete a.colors[el.dataset.apColor];
+    applyAppearance(a);
+    const sw = el.parentElement.querySelector('.swatch');
+    if (sw) sw.style.background = paletteOf(a)[el.dataset.apColor];
+    saveSettings();
+  } else if (el.dataset.apNum) {
+    const v = numOrNull(el.value);
+    if (v !== null) { S.settings.appearance[el.dataset.apNum] = v; applyAppearance(S.settings.appearance); saveSettings(); }
+  } else if ('apCss' in el.dataset) {
+    S.settings.appearance.customCss = el.value;
+    applyAppearance(S.settings.appearance);
+    saveSettings();
   } else if (el.dataset.extSum) {
     const k = el.dataset.extSum;
     S.settings.ext.summarize[k] = ['words', 'every', 'depth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.summarize[k]) : el.value;
@@ -2523,6 +2838,27 @@ document.addEventListener('change', (e) => {
   if (el.dataset.extEnhanceToggle) {
     S.settings.ext.enhance[el.dataset.extEnhanceToggle] = el.checked;
     saveSettings();
+    return;
+  }
+  if (el.dataset.extMemToggle) {
+    S.settings.ext.memory[el.dataset.extMemToggle] = el.checked;
+    saveSettings();
+    rerenderSettings();
+    return;
+  }
+  if (el.dataset.extMemSelect) {
+    S.settings.ext.memory[el.dataset.extMemSelect] = el.value;
+    saveSettings();
+    rerenderSettings();
+    return;
+  }
+  if (el.dataset.apSelect) {
+    const a = S.settings.appearance;
+    a[el.dataset.apSelect] = el.value;
+    if (el.dataset.apSelect === 'theme') a.colors = {};
+    applyAppearance(a);
+    saveSettings();
+    rerenderSettings();
     return;
   }
   if (el.dataset.extSumToggle) {
@@ -2635,6 +2971,7 @@ const ICONS = {
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
   users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3.2-5.5 7-5.5s7 2 7 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2.3.7 4 2.4 4 5.2"/>'),
   note: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>'),
+  layers: svg('<path d="M12 2l10 5-10 5L2 7z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/>'),
   sliders: svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
   close: svg('<path d="M18 6L6 18M6 6l12 12"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
@@ -2654,10 +2991,13 @@ async function boot() {
     ext: {
       enhance: { ...def.ext.enhance, ...((settings.ext || {}).enhance || {}) },
       summarize: { ...def.ext.summarize, ...((settings.ext || {}).summarize || {}) },
+      memory: { ...def.ext.memory, ...((settings.ext || {}).memory || {}) },
     },
+    appearance: { ...def.appearance, ...(settings.appearance || {}) },
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
   if (!settings) await saveSettings(true);
+  applyAppearance(S.settings.appearance);
   for (const key of ['presets', 'lorebooks', 'regex', 'groups', 'qr']) {
     try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
   }

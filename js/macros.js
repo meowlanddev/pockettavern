@@ -99,7 +99,9 @@ function evalOne(body, env) {
     case 'isotime': return now.toTimeString().slice(0, 5);
     case 'isodate': return now.toISOString().slice(0, 10);
     case 'idle_duration': return 'a moment';
-    default: return raw === body ? null : null;
+    default:
+      if (env.custom && Object.prototype.hasOwnProperty.call(env.custom, lower)) return env.custom[lower];
+      return null;
   }
 }
 

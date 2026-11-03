@@ -347,3 +347,99 @@ details.reasoning .r-body { white-space: pre-wrap; border-left: 2px solid var(--
 .msg.sys > .av { display: none; }
 .msg.sys .bubble { max-width: 92%; background: transparent; border-style: dashed; text-align: center; }
 .msg.sys .bubble .name { color: var(--muted); }
+
+/* ---------- memory (ghosted messages, audit marks) ---------- */
+.msg.ghost .bubble { opacity: .55; }
+.ghost-tag, .audit-tag { font-size: .7rem; font-weight: 600; margin-left: 6px; }
+.ghost-tag { color: var(--muted); }
+.audit-tag { color: #6fcf8a; }
+.mem-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0 12px; }
+.mem-stats div { background: var(--bg3); border-radius: 12px; padding: 8px; text-align: center; font-size: .78rem; color: var(--muted); }
+.mem-stats b { display: block; font-size: 1.05rem; color: var(--text); }
+
+/* ---------- appearance: background image ---------- */
+html { background: #000; }
+body.has-bg::before { content: ''; position: fixed; inset: -20px; background: var(--bg-img) center / cover no-repeat; filter: blur(var(--bg-blur)); z-index: 0; }
+body.has-bg::after { content: ''; position: fixed; inset: 0; background: rgba(0, 0, 0, var(--bg-dim)); z-index: 0; pointer-events: none; }
+#app { z-index: 1; }
+body.has-bg .messages, body.has-bg main.scroll { background: transparent; }
+body.has-bg { background: transparent; }
+.swatch { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); flex-shrink: 0; }
+.color-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.color-row .label { flex: 1; font-size: .9rem; font-weight: 600; }
+.color-row input[type=text] { width: 170px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; font-size: 14px; outline: none; }
+.color-row input[type=color] { width: 34px; height: 30px; border: 0; padding: 0; background: none; }
+.style-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 6px 0 12px; }
+.style-grid button { text-align: left; padding: 10px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.style-grid button.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.style-grid b { display: block; font-size: .9rem; }
+.style-grid span { font-size: .72rem; color: var(--muted); }
+u { color: var(--underline); }
+
+/* ---------- avatar shapes ---------- */
+body.av-rounded .av { border-radius: 28%; }
+body.av-square .av { border-radius: 6px; }
+body.av-portrait .msg > .av { border-radius: 10px; height: auto; aspect-ratio: 3 / 4; }
+
+/* ---------- chat styles ---------- */
+/* full-width styles share this */
+body.chat-flat .msg, body.chat-document .msg, body.chat-hush .msg, body.chat-echo .msg,
+body.chat-whisper .msg, body.chat-ripple .msg, body.chat-tide .msg { flex-direction: row; }
+body.chat-flat .bubble, body.chat-document .bubble, body.chat-hush .bubble, body.chat-echo .bubble,
+body.chat-whisper .bubble, body.chat-ripple .bubble, body.chat-tide .bubble { max-width: 100%; flex: 1; min-width: 0; }
+body:not(.chat-bubble) .msg.user .bubble .name { text-align: left; }
+body:not(.chat-bubble) .msg.user .msg-actions { justify-content: flex-start; padding-right: 0; padding-left: 42px; }
+
+/* Flat */
+body.chat-flat .bubble, body.chat-flat .msg.user .bubble { background: transparent; border: 0; border-radius: 0; padding: 0 2px; }
+body.chat-flat .msg { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+body.chat-flat .msg.user { background: color-mix(in srgb, var(--user) 50%, transparent); border-radius: 12px; padding: 8px 6px; border-bottom: 0; }
+
+/* Document */
+body.chat-document .messages { padding: 18px 20px 24px; gap: 18px; }
+body.chat-document .msg > .av { display: none; }
+body.chat-document .bubble, body.chat-document .msg.user .bubble { background: transparent; border: 0; padding: 0; border-radius: 0; }
+body.chat-document .bubble .name { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+body.chat-document .msg.user .bubble { border-left: 2px solid var(--accent); padding-left: 12px; }
+body.chat-document .msg-actions { padding-left: 0 !important; }
+
+/* Hush */
+body.chat-hush .msg > .av { display: none; }
+body.chat-hush .bubble, body.chat-hush .msg.user .bubble { background: transparent; border: 0; padding: 0; border-radius: 0; }
+body.chat-hush .msg + .msg { border-top: 1px solid var(--line); padding-top: 12px; }
+body.chat-hush .bubble .name::before { content: ''; display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: var(--av, var(--bg3)) center / cover; vertical-align: -6px; margin-right: 8px; }
+body.chat-hush .msg-actions { padding-left: 0 !important; }
+
+/* Echo */
+body.chat-echo .msg > .av { display: none; }
+body.chat-echo .bubble, body.chat-echo .msg.user .bubble { padding: 0 0 10px; border-radius: 16px; overflow: hidden; background: var(--char); }
+body.chat-echo .msg.user .bubble { background: var(--user); }
+body.chat-echo .bubble::before { content: ''; display: block; height: 170px; background: var(--av, linear-gradient(135deg, var(--bg3), var(--bg2))) center 18% / cover; -webkit-mask-image: linear-gradient(to bottom, #000 50%, transparent); mask-image: linear-gradient(to bottom, #000 50%, transparent); }
+body.chat-echo .msg[data-noav] .bubble::before { height: 46px; }
+body.chat-echo .bubble .name { position: relative; margin: -38px 14px 8px; font-size: 1.05rem; color: var(--text); text-shadow: 0 1px 8px rgba(0, 0, 0, .7); }
+body.chat-echo .bubble > :not(.name) { margin-left: 14px; margin-right: 14px; }
+body.chat-echo .msg-actions { padding-left: 0 !important; }
+
+/* Whisper */
+body.chat-whisper .msg > .av { display: none; }
+body.chat-whisper .bubble, body.chat-whisper .msg.user .bubble { position: relative; overflow: hidden; border-radius: 16px; padding-top: 60px; background: var(--char); }
+body.chat-whisper .msg.user .bubble { background: var(--user); }
+body.chat-whisper .bubble::before { content: ''; position: absolute; top: 0; right: 0; width: 60%; height: 120px; background: var(--av, none) center 20% / cover; opacity: .85; -webkit-mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent); -webkit-mask-composite: source-in; mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent); mask-composite: intersect; }
+body.chat-whisper .msg[data-noav] .bubble { padding-top: 10px; }
+body.chat-whisper .bubble > * { position: relative; }
+body.chat-whisper .msg-actions { padding-left: 0 !important; }
+
+/* Ripple */
+body.chat-ripple .msg > .av { display: none; }
+body.chat-ripple .bubble, body.chat-ripple .msg.user .bubble { border-radius: 16px; display: flow-root; }
+body.chat-ripple .bubble::before { content: ''; float: left; width: 88px; height: 88px; border-radius: 50%; background: var(--av, var(--bg3)) center 20% / cover; margin: 2px 12px 6px 0; box-shadow: 0 0 0 3px var(--bg), 0 0 0 4px var(--line); }
+body.chat-ripple .msg.user .bubble::before { float: right; margin: 2px 0 6px 12px; }
+body.chat-ripple .msg[data-noav] .bubble::before { display: none; }
+body.chat-ripple .msg-actions { padding-left: 0 !important; }
+
+/* Tide */
+body.chat-tide .msg > .av { display: none; }
+body.chat-tide .bubble, body.chat-tide .msg.user .bubble { position: relative; overflow: hidden; border-radius: 16px; min-height: 90px; }
+body.chat-tide .bubble::before { content: ''; position: absolute; inset: 0; background: var(--av, none) center 20% / cover; opacity: .2; }
+body.chat-tide .bubble > * { position: relative; }
+body.chat-tide .msg-actions { padding-left: 0 !important; }

@@ -53,6 +53,7 @@ export const COMMANDS = [
   '/impersonate', '/continue', '/regenerate', '/setinput text', '/input prompt', '/popup text', '/echo text',
   '/setvar key=name value', '/getvar name', '/addvar key=name value', '/incvar name', '/decvar name', '/flushvar name',
   '/setglobalvar key=name value', '/getglobalvar name', '/pass text', '/delay ms', '/preset name', '/persona name', '/abort',
+  '/sc-status', '/sc-preview', '/sc-clear', '/chatstyle name',
 ];
 
 /**
@@ -109,7 +110,9 @@ export async function runScript(src, api) {
       case 'preset': api.preset(arg); break;
       case 'persona': api.persona(arg); break;
       case 'abort': return pipe;
-      default: throw new Error(`/${cmd.name} isn't supported in PocketTavern yet.`);
+      default:
+        if (api.custom && api.custom[name]) { const r = await api.custom[name](arg, named); if (r !== undefined) pipe = String(r); break; }
+        throw new Error(`/${cmd.name} isn't supported in PocketTavern yet.`);
     }
   }
   return pipe;

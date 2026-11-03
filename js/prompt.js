@@ -43,7 +43,10 @@ function formatExamples(raw, heading) {
  * group: { names: 'A, B', nameOf(msg) } for group chats (names are prefixed to history, nudge added)
  * Returns { messages, stats, vars }
  */
-export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null }) {
+export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null, memory = null, continuity = '' }) {
+  // Ghosted messages are covered by long-term memory and not sent (they stay visible in the chat).
+  const fullLength = history.length; // timed lorebook effects count every message
+  history = history.filter((m) => !m.ghost);
   const P = settings.prompt;
   const samplers = settings.preset;
   const pr = preset || simplePreset(P);
@@ -77,12 +80,13 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     outlets: {},
     group: group ? group.names : undefined,
     summary: (summary && summary.text) || '',
+    custom: { summaryception_memory: (memory && memory.text) || '' },
   };
   const macro = (t) => evaluateMacros(t, env);
 
   // ---- lorebooks
   const { entries } = collectLoreEntries({ char: charWithBook, persona, lorebooks });
-  const wi = activateWorldInfo({ entries, history: texts, char, persona, defaultDepth: P.wi_scan_depth || 4, timed, chatLength: history.length });
+  const wi = activateWorldInfo({ entries, history: texts, char, persona, defaultDepth: P.wi_scan_depth || 4, timed, chatLength: fullLength });
   const wiText = (list) => list.map((e) => applyRegex(macro(e.content), scripts, { placement: PLACEMENT.WORLD_INFO, isPrompt: true, macro }).trim()).filter(Boolean).join('\n');
   for (const [name, list] of Object.entries(wi.outlets)) env.outlets[name] = wiText(list);
   const wrapWi = (s) => (s ? (pr.formats.wi_format || '{0}').replace('{0}', s) : '');
@@ -153,6 +157,15 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     if (summary.position === 'depth') injections.push({ depth: Number(summary.depth) || 0, order: 50, role: summary.role || 'system', content });
     else blocks.splice(mainAt + 1, 0, { role: 'system', content });
   }
+
+  // Long-term memory (layered memory extension)
+  if (memory && memory.text && memory.text.trim() && memory.position !== 'macro') {
+    const content = macro((memory.template || '{{memory}}').replace(/\{\{memory\}\}/gi, memory.text.trim()));
+    if (memory.position === 'chat') injections.push({ depth: Number(memory.depth) || 0, order: 40, role: memory.role || 'system', content });
+    else if (memory.position === 'prompt') blocks.splice(mainAt + 1, 0, { role: memory.role || 'system', content });
+    else blocks.unshift({ role: memory.role || 'system', content });
+  }
+  if (continuity && continuity.trim()) injections.push({ depth: 0, order: 30, role: 'system', content: macro(continuity) });
 
   // lorebook entries placed in the chat
   for (const e of wi.depth) {
