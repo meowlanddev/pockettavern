@@ -10,9 +10,10 @@ import { formatMessage, renderInto, setThemeShadowCss } from './render.js';
 import { runScript } from './stscript.js';
 import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
 import * as MEM from './memory.js';
+import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -25,10 +26,12 @@ function defaultSettings() {
       frequency_penalty: 0, presence_penalty: 0, repetition_penalty: 1,
       max_tokens: 600, context_size: 32000, stream: true,
       claude_sampling: false, claude_effort: '', show_thoughts: false,
+      stop_strings: '', stop_on_names: true, reasoning_parse: true, reasoning_prefix: '<think>', reasoning_suffix: '</think>',
     },
     prompt: {
       main: DEFAULT_MAIN, post_history: '',
       prefer_card_system: true, prefer_card_post_history: true, wi_scan_depth: 4,
+      wi_budget: 25, wi_recursion: true, wi_max_recursion: 3,
     },
     personas: [{ id: pid, name: 'User', description: '', avatar: null }],
     activePersona: pid,
@@ -191,6 +194,28 @@ function continuityFor(chat) {
   return live ? MEM.renderContinuity(live.state, live.stale) : '';
 }
 
+const unescapeStop = (s) => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+/** Stopping strings and <think> parsing for a request. kind: reply | impersonate | quiet */
+function genOptions(kind, speaker) {
+  const p = S.settings.preset;
+  const user = activePersona().name || 'User';
+  const env = { char: (speaker || S.char || {}).name, user, vars: { ...((S.chat && S.chat.vars) || {}) } };
+  const custom = String(p.stop_strings || '').split('\n').map((x) => x.replace(/\r$/, '')).filter((x) => x.trim()).map((x) => evaluateMacros(unescapeStop(x), env));
+  const names = [];
+  if (p.stop_on_names !== false && kind !== 'quiet') {
+    if (kind === 'impersonate') {
+      if (speaker) names.push(`\n${speaker.name}:`);
+      groupMembers().forEach((c) => names.push(`\n${c.name}:`));
+    } else {
+      names.push(`\n${user}:`);
+      groupMembers().filter((c) => !speaker || c.id !== speaker.id).forEach((c) => names.push(`\n${c.name}:`));
+    }
+  }
+  const think = p.reasoning_parse !== false ? { prefix: p.reasoning_prefix || '<think>', suffix: p.reasoning_suffix || '</think>' } : null;
+  return { stop: [...new Set([...custom, ...names])], think };
+}
+
 const connFor = (model) => { const c = activeConn(); return c && model ? { ...c, model } : c; };
 const memNameOf = (m) => (m.role === 'user' ? (activePersona().name || 'User') : m.role === 'system' ? 'Narrator' : ((speakerOf(m) || S.char || {}).name || m.name || 'Character'));
 
@@ -330,7 +355,7 @@ async function quietGenerate(quietPrompt, { onToken, maxTokens, signal, chat = S
   const { messages } = promptFor({ ...chat, vars: { ...(chat.vars || {}) } }, cardForSpeaker(speaker), chat.messages.slice(), { mode: 'quiet', quietPrompt });
   const preset = { ...S.settings.preset, stream: !!onToken && S.settings.preset.stream };
   if (maxTokens) preset.max_tokens = maxTokens;
-  return generate(conn, preset, messages, { signal, onToken });
+  return generate(conn, preset, messages, { signal, onToken, ...genOptions('quiet') });
 }
 
 // ---------- Enhance My Reply ----------
@@ -480,6 +505,8 @@ function scriptApi(chat) {
       saveSettings();
     },
     custom: {
+      hide: (arg) => setHidden(chat, arg, true),
+      unhide: (arg) => setHidden(chat, arg, false),
       'sc-status': () => {
         const layers = (chat.mem && chat.mem.layers) || [];
         const t = `Memory: ${chat.messages.filter((m) => m.ghost).length} messages ghosted; memories per layer ${layers.map((l) => l.length).join('/') || 0}.`;
@@ -751,6 +778,10 @@ async function importFiles() {
   let lastPreset = null;
   let lastBook = null;
   for (const f of files) {
+    if (/\.zip$/i.test(f.name) || f.type === 'application/zip' || f.type === 'application/x-zip-compressed') {
+      await importStZip(f);
+      continue;
+    }
     try {
       const buf = await f.arrayBuffer();
       const base = f.name.replace(/\.[^.]+$/, '');
@@ -842,6 +873,268 @@ async function importFiles() {
 function applyPresetSamplers(p) {
   for (const [k, v] of Object.entries(p.samplers || {})) if (v !== undefined) S.settings.preset[k] = v;
   saveSettings();
+}
+
+/** /hide 3, /hide 2-5, /unhide (no argument = last message). Indexes are 0-based like SillyTavern's. */
+function setHidden(chat, arg, hidden) {
+  const n = chat.messages.length;
+  if (!n) return;
+  let a = n - 1;
+  let b = n - 1;
+  const m = String(arg || '').trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+  if (m) { a = Number(m[1]); b = m[2] !== undefined ? Number(m[2]) : a; }
+  for (let i = Math.max(0, Math.min(a, b)); i <= Math.min(n - 1, Math.max(a, b)); i++) chat.messages[i].hidden = hidden;
+  saveChat(chat);
+  if (S.chat === chat) renderMessages();
+}
+
+/** Import a zipped SillyTavern data folder. */
+async function importStZip(file) {
+  openSheet(`<div class="sheet-title">Importing SillyTavern data</div>
+    <p id="imp-progress">Reading the zip…</p><div id="imp-result"></div>`, 'tall');
+  const prog = (t) => { const el = $('#imp-progress'); if (el) el.textContent = t; };
+  const log = [];
+  const done = { chars: 0, chats: 0, groups: 0, groupChats: 0, personas: 0, books: 0, presets: 0, regex: 0, themes: 0, qr: 0, skipped: 0 };
+  const lower = (x) => String(x || '').replace(/\.png$/i, '').toLowerCase();
+  const span = (msgs) => msgs.reduce((r, m) => [Math.min(r[0], m.ts), Math.max(r[1], m.ts)], [Infinity, 0]);
+  try {
+    const z = classify(await openZip(file));
+    let st = {};
+    if (z.settings) { try { st = await readJson(file, z.settings); } catch { log.push('settings.json could not be read'); } }
+    const wiS = st.world_info_settings || {};
+    const wiCfg = wiS.world_info || st.world_info || {};
+    const pu = st.power_user || {};
+    const ext = st.extension_settings || {};
+    if (!z.characters.length && !z.worlds.length && !z['OpenAI Settings'].length && !z.chats.length) {
+      throw new Error("This zip doesn't look like a SillyTavern data folder (no characters, chats, worlds or presets folders found).");
+    }
+
+    // Lorebooks
+    prog('Lorebooks…');
+    const bookByName = new Map(S.lorebooks.map((b) => [b.name.toLowerCase(), b]));
+    const globalSel = new Set((wiCfg.globalSelect || []).map((x) => String(x).toLowerCase()));
+    for (const e of z.worlds) {
+      if (!/\.json$/i.test(e.rel) || e.rel.includes('/')) continue;
+      const name = baseName(e.rel);
+      if (bookByName.has(name.toLowerCase())) { done.skipped++; continue; }
+      try {
+        const b = normalizeBook(await readJson(file, e), name);
+        const book = { id: db.uid(), name, global: globalSel.has(name.toLowerCase()), scanDepth: b.scanDepth, entries: b.entries };
+        S.lorebooks.push(book);
+        bookByName.set(name.toLowerCase(), book);
+        done.books++;
+      } catch (err) { log.push(`Lorebook ${name}: ${err.message}`); }
+    }
+    await saveLorebooks(true);
+    const P = S.settings.prompt;
+    if (wiS.world_info_depth != null) P.wi_scan_depth = Number(wiS.world_info_depth) || P.wi_scan_depth;
+    if (wiS.world_info_budget != null) P.wi_budget = Number(wiS.world_info_budget) || 0;
+    if (wiS.world_info_recursive != null) P.wi_recursion = !!wiS.world_info_recursive;
+    if (wiS.world_info_max_recursion_steps != null) P.wi_max_recursion = Number(wiS.world_info_max_recursion_steps) || 0;
+
+    // Characters
+    const existing = await db.getAll('characters');
+    const charByFile = new Map(existing.filter((c) => c.fileName).map((c) => [c.fileName.toLowerCase(), c]));
+    const charLore = new Map((wiCfg.charLore || []).map((x) => [lower(x.name), x.extraBooks || []]));
+    const cards = z.characters.filter((e) => !e.rel.includes('/') && /\.(png|json)$/i.test(e.rel));
+    for (let i = 0; i < cards.length; i++) {
+      const e = cards[i];
+      prog(`Characters ${i + 1} of ${cards.length}…`);
+      const base = baseName(e.rel);
+      if (charByFile.has(base.toLowerCase())) { done.skipped++; continue; }
+      try {
+        const blob = await readEntry(file, e);
+        const f = new File([blob], e.rel, { type: /\.png$/i.test(e.rel) ? 'image/png' : 'application/json' });
+        const { card, avatarBlob } = await parseCardFile(f);
+        const now = Date.now();
+        const c = { id: db.uid(), ...card, fileName: base, avatar: avatarBlob ? await blobToAvatar(avatarBlob) : null, createdAt: now, updatedAt: now };
+        const extra = (charLore.get(base.toLowerCase()) || []).map((n) => bookByName.get(String(n).toLowerCase())).filter(Boolean).map((b) => b.id);
+        if (extra.length) c.lorebooks = extra;
+        await db.put('characters', c);
+        charByFile.set(base.toLowerCase(), c);
+        done.chars++;
+      } catch (err) { log.push(`${e.rel}: ${err.message}`); }
+    }
+
+    // Chats (chats/<character file name>/<chat>.jsonl)
+    const chatFiles = z.chats.filter((e) => /\.jsonl$/i.test(e.rel) && e.rel.includes('/'));
+    const titles = new Map();
+    for (let i = 0; i < chatFiles.length; i++) {
+      const e = chatFiles[i];
+      if (i % 3 === 0 || i === chatFiles.length - 1) prog(`Chats ${i + 1} of ${chatFiles.length}…`);
+      const c = charByFile.get(e.rel.split('/')[0].toLowerCase());
+      if (!c) { done.skipped++; continue; }
+      if (!titles.has(c.id)) titles.set(c.id, new Set((await db.byIndex('chats', 'charId', c.id)).map((x) => x.title)));
+      const title = baseName(e.rel).slice(0, 80);
+      if (titles.get(c.id).has(title)) { done.skipped++; continue; }
+      try {
+        const { messages, meta } = parseStChat(await readText(file, e), { uid: db.uid });
+        if (!messages.length) continue;
+        const [from, to] = span(messages);
+        const chat = { id: db.uid(), charId: c.id, title, createdAt: from, updatedAt: to, messages };
+        const md = meta.chat_metadata || {};
+        if (md.note_prompt) chat.authorsNote = { text: md.note_prompt, depth: Number(md.note_depth ?? 4), role: ['system', 'user', 'assistant'][Number(md.note_role) || 0] };
+        if (md.variables && typeof md.variables === 'object') chat.vars = { ...md.variables };
+        await db.put('chats', chat);
+        if (!c.lastChatAt || to > c.lastChatAt) { c.lastChatAt = to; c.lastChatId = chat.id; await db.put('characters', c); }
+        titles.get(c.id).add(title);
+        done.chats++;
+      } catch (err) { log.push(`${e.rel}: ${err.message}`); }
+    }
+
+    // Groups + group chats
+    for (const e of z.groups.filter((x) => /\.json$/i.test(x.rel) && !x.rel.includes('/'))) {
+      try {
+        const g = await readJson(file, e);
+        if (!g || !Array.isArray(g.members)) continue;
+        if (S.groups.some((x) => x.name === g.name)) { done.skipped++; continue; }
+        const members = g.members.map((m) => charByFile.get(lower(m))).filter(Boolean);
+        if (members.length < 2) { log.push(`Group "${g.name}": members not found`); continue; }
+        const now = Date.now();
+        const group = {
+          id: db.uid(), name: String(g.name || 'Group'), members: members.map((m) => m.id),
+          muted: (g.disabled_members || []).map((m) => charByFile.get(lower(m))).filter(Boolean).map((m) => m.id),
+          strategy: ['natural', 'list', 'manual'][Number(g.activation_strategy) || 0] || 'natural',
+          mode: Number(g.generation_mode) >= 1 ? 'join' : 'swap', scenario: '', createdAt: now, updatedAt: now,
+        };
+        S.groups.push(group);
+        done.groups++;
+        const byName = (n) => { const m = members.find((x) => x.name.toLowerCase() === String(n || '').toLowerCase()); return m && m.id; };
+        for (const chatName of [...new Set([...(g.chats || []), g.chat_id].filter(Boolean))]) {
+          prog(`Group chats: ${group.name}…`);
+          const ce = z['group chats'].find((x) => baseName(x.rel) === String(chatName));
+          if (!ce) continue;
+          const { messages } = parseStChat(await readText(file, ce), { uid: db.uid, memberByName: byName });
+          if (!messages.length) continue;
+          const [from, to] = span(messages);
+          const chat = { id: db.uid(), charId: group.id, groupId: group.id, title: String(chatName).slice(0, 80), createdAt: from, updatedAt: to, messages };
+          await db.put('chats', chat);
+          if (!group.lastChatAt || to > group.lastChatAt) { group.lastChatAt = to; group.lastChatId = chat.id; }
+          done.groupChats++;
+        }
+      } catch (err) { log.push(`${e.rel}: ${err.message}`); }
+    }
+    await saveGroups(true);
+
+    // Personas
+    const pNames = pu.personas || {};
+    const pDescs = pu.persona_descriptions || {};
+    const pFiles = Object.keys(pNames);
+    if (pFiles.length) {
+      prog('Personas…');
+      const avatarEntry = new Map(z['User Avatars'].map((x) => [x.rel, x]));
+      const ps = S.settings.personas;
+      if (ps.length === 1 && ps[0].name === 'User' && !ps[0].description && !ps[0].avatar) S.settings.personas = [];
+      for (const f of pFiles) {
+        const name = String(pNames[f] || baseName(f));
+        if (S.settings.personas.some((p) => p.name === name)) { done.skipped++; continue; }
+        const d = pDescs[f] || {};
+        const p = { id: db.uid(), name, description: String(d.description || ''), avatar: null };
+        const ae = avatarEntry.get(f);
+        if (ae) { try { p.avatar = await blobToAvatar(await readEntry(file, ae), 256); } catch { /* skip avatar */ } }
+        if (d.lorebook) { const b = bookByName.get(String(d.lorebook).toLowerCase()); if (b) p.lorebooks = [b.id]; }
+        for (const link of Array.isArray(d.connections) ? d.connections : []) {
+          if (link && link.type === 'character') {
+            const c = charByFile.get(lower(link.id));
+            if (c) { c.personaId = p.id; await db.put('characters', c); }
+          }
+        }
+        S.settings.personas.push(p);
+        done.personas++;
+        if (f === pu.default_persona || f === st.user_avatar) S.settings.activePersona = p.id;
+      }
+      if (!S.settings.personas.length) S.settings.personas = defaultSettings().personas;
+      if (!S.settings.personas.some((p) => p.id === S.settings.activePersona)) S.settings.activePersona = S.settings.personas[0].id;
+    }
+
+    // Presets
+    prog('Presets…');
+    for (const e of z['OpenAI Settings'].filter((x) => /\.json$/i.test(x.rel) && !x.rel.includes('/'))) {
+      const name = baseName(e.rel);
+      if (S.presets.some((p) => p.name === name)) { done.skipped++; continue; }
+      try {
+        const json = await readJson(file, e);
+        if (isSTPreset(json)) { S.presets.push(importSTPreset(json, name, db.uid())); done.presets++; }
+      } catch (err) { log.push(`Preset ${name}: ${err.message}`); }
+    }
+    const activeName = st.oai_settings && st.oai_settings.preset_settings_openai;
+    const active = activeName && S.presets.find((p) => p.name === activeName);
+    if (active) { S.settings.activePreset = active.id; applyPresetSamplers(active); }
+    await savePresets(true);
+
+    // Regex (global scripts live in settings.json)
+    for (const r of Array.isArray(ext.regex) ? ext.regex : []) {
+      try {
+        const sc = normalizeScript(r);
+        if (S.regex.some((x) => x.scriptName === sc.scriptName && x.findRegex === sc.findRegex)) { done.skipped++; continue; }
+        S.regex.push(sc);
+        done.regex++;
+      } catch { /* not a script */ }
+    }
+    await saveRegex(true);
+
+    // Quick replies
+    const visible = new Map(((ext.quickReplyV2 && ext.quickReplyV2.config && ext.quickReplyV2.config.setList) || []).map((x) => [x.set, x.isVisible !== false]));
+    for (const e of z.QuickReplies.filter((x) => /\.json$/i.test(x.rel))) {
+      try {
+        const json = await readJson(file, e);
+        if (!Array.isArray(json.qrList)) continue;
+        const name = json.name || baseName(e.rel);
+        if (S.qr.some((x) => x.name === name)) { done.skipped++; continue; }
+        S.qr.push({ id: db.uid(), name, visible: visible.get(name) ?? false, buttons: json.qrList.map((q) => ({ id: db.uid(), label: String(q.label || q.title || 'QR'), title: String(q.title || ''), message: String(q.message || '') })) });
+        done.qr++;
+      } catch { /* skip */ }
+    }
+    await saveQr(true);
+
+    // The active UI theme
+    if (pu.theme) {
+      const te = z.themes.find((x) => baseName(x.rel) === pu.theme);
+      const a = S.settings.appearance;
+      if (te && !(a.saved || []).some((t) => t.source === pu.theme || t.name === pu.theme)) {
+        try {
+          const theme = importThemeFile(await readJson(file, te), pu.theme);
+          if (theme) {
+            const t = { id: db.uid(), name: String(theme.name).slice(0, 60), source: pu.theme, colors: { ...paletteOf({ theme: 'midnight', colors: {} }), ...theme.colors } };
+            if ((a.saved || []).some((x) => x.name === t.name)) { done.skipped++; throw Object.assign(new Error('dup'), { quiet: true }); }
+            if (theme.css) {
+              await db.put('kv', theme.css, `themecss:${t.id}`);
+              t.hasCss = true;
+              a.useThemeCss = confirm(`Your SillyTavern theme "${t.name}" has custom CSS from its author. Apply it here too?`);
+            }
+            a.saved = [...(a.saved || []), t];
+            a.theme = t.id;
+            a.colors = {};
+            if (theme.chatStyle) a.chatStyle = theme.chatStyle;
+            if (theme.avatarShape) a.avatarShape = theme.avatarShape;
+            if (typeof theme.timestamps === 'boolean') a.timestamps = theme.timestamps;
+            done.themes++;
+          }
+        } catch (err) { if (!err.quiet) log.push(`Theme: ${err.message}`); }
+      }
+    }
+
+    // Global variables
+    if (ext.variables && ext.variables.global && typeof ext.variables.global === 'object') {
+      S.settings.globalVars = { ...(S.settings.globalVars || {}), ...ext.variables.global };
+    }
+    await saveSettings(true);
+    await applyLook();
+  } catch (err) {
+    log.unshift(err.message || String(err));
+  }
+  const rows = [
+    ['Characters', done.chars], ['Chats', done.chats], ['Group chats', done.groups ? `${done.groups} groups, ${done.groupChats} chats` : 0],
+    ['Personas', done.personas], ['Lorebooks', done.books], ['Presets', done.presets], ['Regex scripts', done.regex],
+    ['Quick reply sets', done.qr], ['Theme', done.themes], ['Already here (skipped)', done.skipped],
+  ].filter(([, v]) => v);
+  prog(rows.length ? 'Done!' : 'Nothing was imported.');
+  const box = $('#imp-result');
+  if (box) {
+    box.innerHTML = `${rows.map(([k, v]) => `<div class="list-row"><span class="grow">${k}</span><b>${esc(v)}</b></div>`).join('')}
+      ${log.length ? `<h3 class="sheet-sub">Notes</h3><div class="pv"><pre>${esc(log.slice(0, 40).join('\n'))}${log.length > 40 ? `\n…and ${log.length - 40} more` : ''}</pre></div>` : ''}
+      <button class="btn primary block" data-action="imp-done">Done</button>`;
+  }
 }
 
 function groupAvatarHtml(members, size = 'lg') {
@@ -977,6 +1270,12 @@ async function renderChatView(charId, chatId) {
   }
   if (!char) throw new Error('Character not found');
   S.char = char;
+  // Persona locked to this character (like SillyTavern's persona lock)
+  if (!group && char.personaId && char.personaId !== S.settings.activePersona && S.settings.personas.some((p) => p.id === char.personaId)) {
+    S.settings.activePersona = char.personaId;
+    saveSettings();
+    setTimeout(() => toast(`Persona: ${activePersona().name}`), 50);
+  }
   S.chats = (await db.byIndex('chats', 'charId', charId)).sort((a, b) => b.updatedAt - a.updatedAt);
   let chat = chatId ? S.chats.find((c) => c.id === chatId) : (S.chats.find((c) => c.id === char.lastChatId) || S.chats[0]);
   if (!chat) {
@@ -1062,6 +1361,9 @@ function msgHtml(msg, isLast) {
     <div class="msg-actions">
       <button data-action="msg-edit" data-id="${msg.id}">${ICONS.edit}<span>Edit</span></button>
       <button data-action="msg-copy" data-id="${msg.id}">${ICONS.copy}<span>Copy</span></button>
+      <button data-action="msg-hide" data-id="${msg.id}">${ICONS.eye}<span>${msg.hidden ? 'Unhide' : 'Hide'}</span></button>
+      ${n > 1 ? `<button data-action="msg-del-swipe" data-id="${msg.id}">${ICONS.trash}<span>Delete swipe</span></button>` : ''}
+      <span class="tok-count">≈${MEM.estTokens(raw)} tokens</span>
       ${!isUser && isLast ? `<button data-action="msg-regen" data-id="${msg.id}">${ICONS.refresh}<span>Redo</span></button>` : ''}
       <button data-action="msg-branch" data-id="${msg.id}">${ICONS.branch}<span>Branch</span></button>
       <button class="danger" data-action="msg-delete" data-id="${msg.id}">${ICONS.trash}<span>Delete</span></button>
@@ -1072,10 +1374,10 @@ function msgHtml(msg, isLast) {
   // Markup mirrors SillyTavern's (#chat .mes .mes_block .ch_name .name_text …) so ST UI themes' custom CSS applies.
   const mesid = S.chat.messages.indexOf(msg);
   const when = msg.ts ? new Date(msg.ts).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  return `<div class="msg mes ${isUser ? 'user' : msg.role === 'system' ? 'sys smallSysMes' : 'char'}${msg.ghost ? ' ghost' : ''}${isLast ? ' last_mes' : ''}" data-id="${msg.id}" data-sp="${esc(sp)}" mesid="${mesid}" swipeid="${msg.swipeIdx}" is_user="${isUser}" is_system="${msg.role === 'system'}" ch_name="${esc(name)}"${avatar ? '' : ' data-noav'}>
+  return `<div class="msg mes ${isUser ? 'user' : msg.role === 'system' ? 'sys smallSysMes' : 'char'}${msg.ghost || msg.hidden ? ' ghost' : ''}${isLast ? ' last_mes' : ''}" data-id="${msg.id}" data-sp="${esc(sp)}" mesid="${mesid}" swipeid="${msg.swipeIdx}" is_user="${isUser}" is_system="${msg.role === 'system'}" ch_name="${esc(name)}"${avatar ? '' : ' data-noav'}>
       <div class="mesAvatarWrapper"><div class="avatar">${avatarHtml(avatar, name, 'av sm')}</div></div>
       <div class="bubble mes_block" data-action="toggle-msg" data-id="${msg.id}">
-        <div class="name ch_name"><div class="flex-container"><div class="alignItemsBaseline"><span class="name_text">${esc(name)}</span>${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>${when ? `<small class="timestamp">${esc(when)}</small>` : ''}<small class="mesIDDisplay">#${mesid}</small></div></div>
+        <div class="name ch_name"><div class="flex-container"><div class="alignItemsBaseline"><span class="name_text">${esc(name)}</span>${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${msg.hidden ? '<span class="ghost-tag" title="Hidden from the AI">🙈 hidden</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>${when ? `<small class="timestamp">${esc(when)}</small>` : ''}<small class="mesIDDisplay">#${mesid}</small></div></div>
         ${reasoning && !editing ? reasoningHtml(reasoning, generatingThis && !raw) : ''}
         ${body}
         ${swipes}
@@ -1242,6 +1544,7 @@ async function runGeneration(mode, speakerId) {
     let produced = '';
     const text = await generate(conn, S.settings.preset, messages, {
       signal: S.abort.signal,
+      ...genOptions('reply', speaker),
       onToken: (t, r) => {
         produced = t;
         msg.swipes[idx] = original + postfix + (original ? t : t.replace(/^\s+/, ''));
@@ -1316,6 +1619,7 @@ async function runImpersonate() {
   try {
     const text = await generate(conn, S.settings.preset, messages, {
       signal: S.abort.signal,
+      ...genOptions('impersonate', speaker),
       onToken: (t) => { if (S.chat === chat) { input.value = t.replace(/^\s+/, ''); autosize(input); } },
     });
     const name = activePersona().name;
@@ -1379,6 +1683,7 @@ function chatMenu() {
       <button data-action="go" data-to="#/${S.group ? 'group' : 'edit'}/${S.char.id}">${ICONS.edit}<span>Edit ${S.group ? 'group' : 'character'}</span></button>
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
       ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
+      ${S.group ? '' : `<button data-action="persona-lock">${ICONS.user}<span>${S.char.personaId === S.settings.activePersona ? `Unlock persona` : `Lock persona “${esc(activePersona().name)}”`}</span></button>`}
       <button data-action="export-chat">${ICONS.download}<span>Export chat</span></button>
       ${S.group ? '' : `<button data-action="import-chat">${ICONS.import}<span>Import ST chat</span></button>`}
       <button data-action="go" data-to="#/settings">${ICONS.gear}<span>Settings</span></button>
@@ -1464,7 +1769,8 @@ function exportChat() {
     lines.push(JSON.stringify({
       name: isUser ? persona.name : (speakerOf(m) || S.char).name,
       is_user: isUser,
-      is_system: false,
+      is_system: !!m.hidden,
+      ...(m.role === 'system' ? { extra: { type: 'narrator' } } : {}),
       send_date: new Date(m.ts || Date.now()).toISOString(),
       mes: m.swipes[m.swipeIdx] || '',
       ...(isUser ? {} : { swipes: m.swipes, swipe_id: m.swipeIdx }),
@@ -1477,16 +1783,7 @@ async function importChat() {
   const [file] = await pickFile('file-chat');
   if (!file) return;
   try {
-    const text = await file.text();
-    const rows = text.split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
-    const msgs = [];
-    for (const r of rows) {
-      if (r.mes === undefined || r.is_system) continue;
-      const swipes = Array.isArray(r.swipes) && r.swipes.length ? r.swipes.map(String) : [String(r.mes)];
-      let idx = Number.isInteger(r.swipe_id) ? r.swipe_id : swipes.indexOf(String(r.mes));
-      if (idx < 0 || idx >= swipes.length) { swipes.push(String(r.mes)); idx = swipes.length - 1; }
-      msgs.push({ id: db.uid(), role: r.is_user ? 'user' : 'assistant', swipes, swipeIdx: idx, ts: Date.parse(r.send_date) || Date.now() });
-    }
+    const { messages: msgs } = parseStChat(await file.text(), { uid: db.uid });
     if (!msgs.length) throw new Error('No messages found in that file');
     const now = Date.now();
     const chat = { id: db.uid(), charId: S.char.id, title: file.name.replace(/\.jsonl?$/i, '').slice(0, 60), createdAt: now, updatedAt: now, messages: msgs };
@@ -1553,6 +1850,17 @@ async function renderEditView(id) {
         </div>
         <button class="btn sm" data-action="alt-add">${ICONS.plus} Add greeting</button>
       </div>
+      <div class="field"><span class="label">Character's Note <span class="hint">(inserted into the chat at a depth every turn; SillyTavern's depth prompt)</span></span>
+        <textarea data-draft-dp="prompt" rows="3">${esc((d.extensions && d.extensions.depth_prompt && d.extensions.depth_prompt.prompt) || '')}</textarea>
+        <div class="row wrap">
+          <label class="field" style="width:100px"><span class="label">Depth</span><input data-draft-dp="depth" inputmode="numeric" value="${esc((d.extensions && d.extensions.depth_prompt && d.extensions.depth_prompt.depth) ?? 4)}"></label>
+          <label class="field grow"><span class="label">Role</span><select data-draft-dp="role">${['system', 'user', 'assistant'].map((r) => `<option ${((d.extensions && d.extensions.depth_prompt && d.extensions.depth_prompt.role) || 'system') === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+        </div></div>
+      <label class="field inline"><span class="label">Talkativeness<span class="hint">0–1, how often they speak up in group chats</span></span><input data-draft-talk inputmode="decimal" value="${esc((d.extensions && d.extensions.talkativeness) ?? 0.5)}"></label>
+      <label class="field"><span class="label">Persona for this character</span><select data-draft-persona>
+        <option value="">No lock (use the current persona)</option>
+        ${S.settings.personas.map((p) => `<option value="${p.id}" ${d.personaId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+      </select></label>
       <label class="field"><span class="label">Tags <span class="muted small">(comma separated)</span></span>
         <input data-draft-tags value="${esc((d.tags || []).join(', '))}" autocomplete="off"></label>
       <label class="field"><span class="label">Creator</span><input data-draft="creator" value="${esc(d.creator)}" autocomplete="off"></label>
@@ -1580,6 +1888,15 @@ function collectDraft() {
   if (tags) d.tags = tags.value.split(',').map((t) => t.trim()).filter(Boolean);
   const alts = [...document.querySelectorAll('[data-alt]')].map((el) => el.value);
   d.alternate_greetings = alts;
+  const dpText = document.querySelector('[data-draft-dp="prompt"]');
+  if (dpText) {
+    d.extensions = { ...(d.extensions || {}) };
+    const depth = Number(document.querySelector('[data-draft-dp="depth"]').value);
+    d.extensions.depth_prompt = { prompt: dpText.value, depth: Number.isFinite(depth) ? depth : 4, role: document.querySelector('[data-draft-dp="role"]').value };
+    const talk = Number(document.querySelector('[data-draft-talk]').value);
+    if (Number.isFinite(talk)) d.extensions.talkativeness = Math.max(0, Math.min(1, talk));
+    d.personaId = document.querySelector('[data-draft-persona]').value || null;
+  }
   const books = document.querySelectorAll('[data-draft-book]');
   if (books.length) d.lorebooks = [...books].filter((el) => el.checked).map((el) => el.dataset.draftBook);
   const emb = document.querySelector('[data-draft-flag="embedded"]');
@@ -1672,6 +1989,13 @@ function renderSettingsView(open) {
     ${settingsField('Presence penalty', 'preset.presence_penalty')}
     ${settingsField('Repetition penalty', 'preset.repetition_penalty', 'number', '', '1 = off')}
     ${settingsField('Request & show reasoning', 'preset.show_thoughts', 'checkbox', '', "Shows the model's thinking above replies (OpenRouter reasoning models; Claude 4.6 or newer)")}
+    ${settingsField('Auto-parse <think> blocks', 'preset.reasoning_parse', 'checkbox', '', 'Moves reasoning that a model writes at the start of its reply into the Thought process box')}
+    <div class="row wrap">
+      <label class="field grow"><span class="label">Reasoning prefix</span><input data-bind="preset.reasoning_prefix" value="${esc(p.reasoning_prefix || '<think>')}" autocapitalize="off" spellcheck="false"></label>
+      <label class="field grow"><span class="label">Reasoning suffix</span><input data-bind="preset.reasoning_suffix" value="${esc(p.reasoning_suffix || '</think>')}" autocapitalize="off" spellcheck="false"></label>
+    </div>
+    ${settingsField('Stop when the AI writes as you', 'preset.stop_on_names', 'checkbox', '', 'Cuts the reply at a new line starting with “{{user}}:” (and other group members)')}
+    ${settingsField('Custom stopping strings', 'preset.stop_strings', 'textarea', '', 'One per line. \\n = new line. Macros work, e.g. \\n{{user}}:')}
     <h4 class="sub">Claude (direct API)</h4>
     ${settingsField('Send temperature to Claude', 'preset.claude_sampling', 'checkbox', '', 'Only for older Claude models — current ones reject sampling settings.')}
     <label class="field inline"><span class="label">Reasoning effort<span class="hint">Claude direct, and OpenRouter (low–high)</span></span>
@@ -1736,7 +2060,10 @@ function renderSettingsView(open) {
     ${settingsField('Post-history instructions', 'prompt.post_history', 'textarea', '', 'Sent after the chat history, every turn (a.k.a. jailbreak / author’s note).')}
     ${settingsField('Use character’s system prompt', 'prompt.prefer_card_system', 'checkbox', '', 'If a card has one, it replaces the main prompt.')}
     ${settingsField('Use character’s post-history instructions', 'prompt.prefer_card_post_history', 'checkbox')}
-    ${settingsField('Lorebook scan depth', 'prompt.wi_scan_depth', 'number', '', 'How many recent messages are scanned for keywords')}`;
+    ${settingsField('Lorebook scan depth', 'prompt.wi_scan_depth', 'number', '', 'How many recent messages are scanned for keywords')}
+    ${settingsField('Lorebook budget (% of context)', 'prompt.wi_budget', 'number', '', '0 = no limit. Lower-order entries are dropped first')}
+    ${settingsField('Recursive lorebook scan', 'prompt.wi_recursion', 'checkbox', '', 'Entries can trigger other entries')}
+    ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}`;
 
   const personaBody = `
     <label class="field"><span class="label">Active persona</span>
@@ -1854,6 +2181,10 @@ function renderSettingsView(open) {
     ${settingsField('Font size', 'ui.fontSize')}`;
 
   const dataBody = `
+    <div class="field"><span class="label">Move over from SillyTavern</span>
+      <span class="hint">Zip your SillyTavern data folder (SillyTavern/data/default-user — on Windows: right-click → Send to → Compressed folder; on Mac: right-click → Compress), send it to your phone, then import it here. Characters, chats, group chats, personas, lorebooks, presets, regex, your active theme and quick replies come over in one go. Anything you already have is skipped.</span>
+      <button class="btn primary" data-action="import-zip">${ICONS.import} Import SillyTavern data (.zip)</button>
+    </div>
     <div class="row wrap">
       <button class="btn" data-action="backup-export">${ICONS.download} Export backup</button>
       <button class="btn" data-action="backup-import">${ICONS.import} Restore backup</button>
@@ -2328,6 +2659,40 @@ const actions = {
     await saveChat(S.chat);
     renderMessages();
   },
+  'msg-hide': async (el) => {
+    const m = findMsg(el.dataset.id);
+    if (!m) return;
+    m.hidden = !m.hidden;
+    S.openActions = null;
+    await saveChat(S.chat);
+    renderMessages();
+    toast(m.hidden ? 'Hidden from the AI (still in the chat)' : 'Visible to the AI again');
+  },
+  'msg-del-swipe': async (el) => {
+    const m = findMsg(el.dataset.id);
+    if (!m || m.swipes.length < 2 || !confirm('Delete this swipe?')) return;
+    const i = m.swipeIdx;
+    m.swipes.splice(i, 1);
+    if (m.reasoning) m.reasoning.splice(i, 1);
+    if (m.audit) { if (m.audit.swipe === i) delete m.audit; else if (m.audit.swipe > i) m.audit.swipe--; }
+    m.swipeIdx = Math.min(i, m.swipes.length - 1);
+    S.openActions = null;
+    await saveChat(S.chat);
+    renderMessages();
+  },
+  'persona-lock': async () => {
+    const c = await db.get('characters', S.char.id);
+    if (!c) return;
+    c.personaId = c.personaId === S.settings.activePersona ? null : S.settings.activePersona;
+    await db.put('characters', c);
+    S.char.personaId = c.personaId;
+    closeSheet();
+    toast(c.personaId ? `${activePersona().name} is now locked to ${c.name}` : 'Persona unlocked');
+  },
+  'import-zip': async () => {
+    const [f] = await pickFile('file-zip');
+    if (f) await importStZip(f);
+  },
   'msg-copy': async (el) => {
     const msg = findMsg(el.dataset.id);
     try { await navigator.clipboard.writeText(macros(msg.swipes[msg.swipeIdx], ctxNames())); toast('Copied'); } catch { toast('Copy failed'); }
@@ -2335,6 +2700,7 @@ const actions = {
   },
   'msg-regen': (el) => { if (!S.generating) { const m = findMsg(el.dataset.id); runGeneration('swipe', m && m.charId); } },
   'quick-actions': quickActions,
+  'imp-done': () => { closeSheet(); if (route().name === 'home' || !location.hash || location.hash === '#/') renderHome(); else go('#/'); },
   enhance: () => { closeSheet(); enhanceDraft(); },
   'restore-draft': () => { closeSheet(); restoreDraft(); },
   'qa-summary': summarySheet,

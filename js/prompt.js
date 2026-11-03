@@ -46,7 +46,7 @@ function formatExamples(raw, heading) {
 export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null, memory = null, continuity = '' }) {
   // Ghosted messages are covered by long-term memory and not sent (they stay visible in the chat).
   const fullLength = history.length; // timed lorebook effects count every message
-  history = history.filter((m) => !m.ghost);
+  history = history.filter((m) => !m.ghost && !m.hidden);
   const P = settings.prompt;
   const samplers = settings.preset;
   const pr = preset || simplePreset(P);
@@ -86,7 +86,11 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
 
   // ---- lorebooks
   const { entries } = collectLoreEntries({ char: charWithBook, persona, lorebooks });
-  const wi = activateWorldInfo({ entries, history: texts, char, persona, defaultDepth: P.wi_scan_depth || 4, timed, chatLength: fullLength });
+  const wi = activateWorldInfo({
+    entries, history: texts, char, persona, defaultDepth: P.wi_scan_depth || 4, timed, chatLength: fullLength,
+    recursion: P.wi_recursion !== false, maxRecursion: P.wi_max_recursion ?? 3,
+    budget: P.wi_budget > 0 ? Math.round((samplers.context_size || 8192) * P.wi_budget / 100) : 0,
+  });
   const wiText = (list) => list.map((e) => applyRegex(macro(e.content), scripts, { placement: PLACEMENT.WORLD_INFO, isPrompt: true, macro }).trim()).filter(Boolean).join('\n');
   for (const [name, list] of Object.entries(wi.outlets)) env.outlets[name] = wiText(list);
   const wrapWi = (s) => (s ? (pr.formats.wi_format || '{0}').replace('{0}', s) : '');
@@ -173,6 +177,11 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     if (c) injections.push({ depth: e.depth ?? 4, order: e.order, role: ROLE_NUM[e.role] || 'system', content: c });
   }
   const note = chat && chat.authorsNote && chat.authorsNote.text && chat.authorsNote.text.trim() ? chat.authorsNote : null;
+  // Character's Note (V2 card extensions.depth_prompt), inserted in the chat at its depth.
+  const dp = char.extensions && char.extensions.depth_prompt;
+  if (dp && typeof dp.prompt === 'string' && dp.prompt.trim()) {
+    injections.push({ depth: Number(dp.depth ?? 4) || 0, order: 90, role: ['system', 'user', 'assistant'].includes(dp.role) ? dp.role : 'system', content: macro(dp.prompt).trim() });
+  }
   const an = [wiText(wi.anTop), note ? macro(note.text).trim() : '', wiText(wi.anBottom)].filter(Boolean).join('\n');
   if (an) {
     injections.push({
@@ -249,6 +258,7 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
       included: hist.length - injections.length,
       total: history.filter((h) => msgText(h)).length,
       worldInfo: wi.count,
+      worldInfoDropped: wi.droppedByBudget || 0,
       preset: pr.name,
     },
   };

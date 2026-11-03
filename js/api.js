@@ -174,35 +174,74 @@ function anthropicBody(conn, preset, messages) {
   return body;
 }
 
+/** "<think>…</think>" at the start of a reply → reasoning (like SillyTavern's reasoning auto-parse). */
+export function splitThink(raw, prefix, suffix) {
+  const t = raw.replace(/^\s+/, '');
+  if (!prefix) return null;
+  if (t.length < prefix.length && prefix.startsWith(t)) return { reasoning: '', text: '' }; // prefix still arriving
+  if (!t.startsWith(prefix)) return null;
+  const end = suffix ? t.indexOf(suffix, prefix.length) : -1;
+  if (end < 0) return { reasoning: t.slice(prefix.length).replace(/^\s+/, ''), text: '' };
+  return { reasoning: t.slice(prefix.length, end).trim(), text: t.slice(end + suffix.length).replace(/^\s+/, '') };
+}
+
+function earliestStop(text, stops) {
+  let best = -1;
+  for (const s of stops) {
+    if (!s) continue;
+    const i = text.indexOf(s);
+    if (i >= 0 && (best < 0 || i < best)) best = i;
+  }
+  return best;
+}
+
 /**
  * Generate a reply. onToken(fullTextSoFar, reasoningSoFar) is called while streaming.
+ * stop: stopping strings (sent to the API where supported, and always enforced here).
+ * think: { prefix, suffix } to move a leading <think> block into the reasoning.
  * Resolves to the final text.
  */
-export async function generate(conn, preset, messages, { signal, onToken } = {}) {
+export async function generate(conn, preset, messages, { signal, onToken, stop = [], think = null } = {}) {
   if (!conn) throw new Error('No API connection set up. Go to Settings → Connection.');
   if (!conn.model) throw new Error('No model selected. Go to Settings → Connection.');
   const anth = kindOf(conn) === 'anthropic';
   const url = baseUrl(conn) + (anth ? '/messages' : '/chat/completions');
+  stop = (stop || []).filter((x) => typeof x === 'string' && x.length);
   const body = anth ? anthropicBody(conn, preset, messages) : openaiBody(conn, preset, messages);
+  if (stop.length) {
+    if (anth) { const seq = stop.filter((x) => x.trim()).slice(0, 8); if (seq.length) body.stop_sequences = seq; }
+    else if (!/api\.openai\.com/.test(url)) body.stop = stop.slice(0, 4); // OpenAI's newer models reject `stop`
+  }
   const resp = await doFetch(conn, url, { method: 'POST', headers: headers(conn), body: JSON.stringify(body), signal });
   if (!resp.ok) throw await apiError(resp);
 
-  let text = '';
-  let reasoning = '';
+  let raw = '';
+  let native = '';
+  let stopped = false;
+  const view = () => {
+    let text = raw;
+    let reasoning = native;
+    const sp = think && think.prefix ? splitThink(raw, think.prefix, think.suffix || '') : null;
+    if (sp) { text = sp.text; reasoning = [native, sp.reasoning].filter(Boolean).join('\n'); }
+    const cut = stop.length ? earliestStop(text, stop) : -1;
+    if (cut >= 0) { text = text.slice(0, cut); stopped = true; }
+    return { text, reasoning };
+  };
+  const emit = () => { const v = view(); if (onToken) onToken(v.text, v.reasoning); return v; };
+
   if (!body.stream) {
     const j = await resp.json();
     if (anth) {
-      text = (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-      reasoning = (j.content || []).filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('\n');
-      if (!text && j.stop_reason === 'refusal') throw new Error('Claude declined to respond (refusal).');
+      raw = (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+      native = (j.content || []).filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('\n');
+      if (!raw && j.stop_reason === 'refusal') throw new Error('Claude declined to respond (refusal).');
     } else {
       if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
-      text = (j.choices && j.choices[0] && (j.choices[0].message?.content ?? j.choices[0].text)) || '';
+      raw = (j.choices && j.choices[0] && (j.choices[0].message?.content ?? j.choices[0].text)) || '';
       const m = j.choices && j.choices[0] && j.choices[0].message;
-      reasoning = (m && (m.reasoning || m.reasoning_content)) || '';
+      native = (m && (m.reasoning || m.reasoning_content)) || '';
     }
-    onToken && onToken(text, reasoning);
-    return text;
+    return emit().text;
   }
 
   let stopReason = null;
@@ -214,11 +253,11 @@ export async function generate(conn, preset, messages, { signal, onToken } = {})
       try { j = JSON.parse(data); } catch { continue; }
       if (anth) {
         if (j.type === 'content_block_delta' && j.delta && j.delta.type === 'thinking_delta') {
-          reasoning += j.delta.thinking || '';
-          onToken && onToken(text, reasoning);
+          native += j.delta.thinking || '';
+          emit();
         } else if (j.type === 'content_block_delta' && j.delta && j.delta.type === 'text_delta') {
-          text += j.delta.text;
-          onToken && onToken(text, reasoning);
+          raw += j.delta.text;
+          emit();
         } else if (j.type === 'message_delta' && j.delta) {
           stopReason = j.delta.stop_reason || stopReason;
         } else if (j.type === 'error') {
@@ -228,19 +267,19 @@ export async function generate(conn, preset, messages, { signal, onToken } = {})
         if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
         const choice = j.choices && j.choices[0];
         const rd = choice && choice.delta && (choice.delta.reasoning || choice.delta.reasoning_content);
-        if (rd) { reasoning += rd; onToken && onToken(text, reasoning); }
+        if (rd) { native += rd; emit(); }
         const delta = choice && ((choice.delta && choice.delta.content) || choice.text);
-        if (delta) {
-          text += delta;
-          onToken && onToken(text, reasoning);
-        }
+        if (delta) { raw += delta; emit(); }
       }
+      if (stopped) break;
     }
   } catch (e) {
-    if (e.name === 'AbortError') return text;
+    if (e.name === 'AbortError') return view().text;
     if (e instanceof TypeError) throw networkError(e, conn);
     throw e;
   }
-  if (!text && stopReason === 'refusal') throw new Error('Claude declined to respond (refusal).');
-  return text;
+  if (stopped) { try { resp.body && resp.body.cancel(); } catch { /* already released */ } }
+  const out = view();
+  if (!out.text && !raw && stopReason === 'refusal') throw new Error('Claude declined to respond (refusal).');
+  return out.text;
 }

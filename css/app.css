@@ -466,3 +466,5 @@ body.chat-tide .msg-actions { padding-left: 0 !important; }
 body.show-timestamps .msg .timestamp { display: block; font-size: .7rem; color: var(--muted); font-weight: 400; margin-top: 1px; }
 .mes.user .ch_name { text-align: right; }
 body:not(.chat-bubble) .mes.user .ch_name { text-align: left; }
+
+.msg-actions .tok-count { align-self: center; font-size: .72rem; color: var(--muted); padding: 0 4px; }

@@ -60,6 +60,7 @@ export function normalizeEntry(e, i = 0) {
     sticky: Number(first(e.sticky, ext.sticky, 0)) || 0,
     cooldown: Number(first(e.cooldown, ext.cooldown, 0)) || 0,
     delay: Number(first(e.delay, ext.delay, 0)) || 0,
+    ignoreBudget: !!first(e.ignoreBudget, ext.ignore_budget, false),
   };
 }
 
@@ -91,7 +92,7 @@ export function exportBook(book) {
       matchCharacterPersonality: e.matchCharacterPersonality, matchScenario: e.matchScenario,
       characterFilter: e.characterFilter || { isExclude: false, names: [], tags: [] },
       outletName: e.outletName, displayIndex: i, addMemo: true, vectorized: false,
-      sticky: e.sticky || 0, cooldown: e.cooldown || 0, delay: e.delay || 0,
+      sticky: e.sticky || 0, cooldown: e.cooldown || 0, delay: e.delay || 0, ignoreBudget: !!e.ignoreBudget,
     };
   });
   return { entries };
@@ -141,7 +142,7 @@ function filterPasses(e, charNames) {
  * timed: per-chat state for sticky/cooldown (mutated), keyed by entry._key
  * Returns buckets of activated entries (contents NOT yet macro-processed).
  */
-export function activateWorldInfo({ entries, history, char, persona, defaultDepth = 4, timed = null, chatLength = null }) {
+export function activateWorldInfo({ entries, history, char, persona, defaultDepth = 4, timed = null, chatLength = null, recursion = true, maxRecursion = 3, budget = 0 }) {
   const out = { before: [], after: [], depth: [], anTop: [], anBottom: [], emTop: [], emBottom: [], outlets: {}, count: 0 };
   if (!entries || !entries.length) return out;
   const charNames = new Set([norm(char && char.name), norm(char && char.fileName)].filter(Boolean));
@@ -178,7 +179,8 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
 
   // Recursion: activated entries' contents can trigger other entries.
   let buffer = [...active].filter((e) => !e.preventRecursion).map((e) => e.content).join('\n');
-  for (let pass = 0; pass < 3 && buffer; pass++) {
+  const passes = !recursion ? 0 : (Number(maxRecursion) > 0 ? Number(maxRecursion) : 10);
+  for (let pass = 0; pass < passes && buffer; pass++) {
     const newly = [];
     for (const e of candidates) {
       if (active.has(e) || e.excludeRecursion || e.constant || !e.keys.length) continue;
@@ -226,6 +228,16 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
         sticky: e.sticky ? { start: now, end: now + e.sticky } : null,
         cooldown: e.cooldown ? { from: now + e.sticky + 1, to: now + e.sticky + e.cooldown } : null,
       };
+    }
+  }
+
+  // Budget: highest-order entries win when the lorebook would take too much of the context.
+  if (budget > 0) {
+    let used = 0;
+    for (const e of [...active].sort((a, b) => b.order - a.order)) {
+      const t = Math.ceil(e.content.length / 3.5);
+      if (!e.ignoreBudget && used + t > budget) { active.delete(e); out.droppedByBudget = (out.droppedByBudget || 0) + 1; continue; }
+      used += t;
     }
   }
 
