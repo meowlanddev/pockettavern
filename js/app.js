@@ -1,4 +1,5 @@
 import * as db from './db.js';
+import * as V from './vault.js';
 import { parseCardFile, blobToAvatar, exportCardPng, toV2, isPng, normalizeCard } from './card.js';
 import { buildPrompt, macros } from './prompt.js';
 import { PROVIDERS, TEXT_SERVERS, diagnose, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
@@ -87,7 +88,8 @@ $('#toast').addEventListener('click', () => $('#toast').classList.remove('show')
 let saveTimer;
 function saveSettings(now = false) {
   clearTimeout(saveTimer);
-  const doSave = () => { S.settings.savedAt = Date.now(); return db.put('kv', S.settings, 'settings'); };
+  // Keys go into the encrypted device vault; the stored settings have none.
+  const doSave = () => { S.settings.savedAt = Date.now(); return V.storeSettings(S.settings).then((st) => db.put('kv', st, 'settings')); };
   if (now) return doSave();
   saveTimer = setTimeout(doSave, 400);
 }
@@ -2570,6 +2572,8 @@ async function saveDraft() {
 }
 
 // ---------- SETTINGS ----------
+// Saved keys are never shown again: just the last 4 characters as a hint.
+const secretHint = (key, ph = '') => (key ? `Saved key ••••${String(key).slice(-4)} — type to replace` : ph);
 function settingsField(label, path, type = 'number', attrs = '', hint = '') {
   const val = getPath(path);
   if (type === 'checkbox') {
@@ -2601,7 +2605,7 @@ function setPath(path, value) {
 function extSections() {
   const e = S.settings.ext;
   const tog = (path, label, hint = '') => { const [g, k] = path.split('.'); return `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" data-x-toggle="${path}" ${e[g][k] ? 'checked' : ''}><i></i></label>`; };
-  const txt = (path, label, hint = '', type = 'text', ph = '') => { const [g, k] = path.split('.'); return `<label class="field"><span class="label">${label}${hint ? ` <span class="hint">${hint}</span>` : ''}</span><input ${type === 'password' ? 'type="password" data-secret' : 'type="text"'} data-x="${path}" ${type === 'password' ? '' : `value="${esc(e[g][k] ?? '')}"`} placeholder="${esc(ph)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`; };
+  const txt = (path, label, hint = '', type = 'text', ph = '') => { const [g, k] = path.split('.'); return `<label class="field"><span class="label">${label}${hint ? ` <span class="hint">${hint}</span>` : ''}</span><span class="row"><input ${type === 'password' ? 'type="password" data-secret' : 'type="text"'} data-x="${path}" ${type === 'password' ? '' : `value="${esc(e[g][k] ?? '')}"`} placeholder="${esc(type === 'password' ? secretHint(e[g][k], ph) : ph)}" autocomplete="off" autocapitalize="off" spellcheck="false">${type === 'password' && e[g][k] ? `<button class="btn sm" data-action="secret-clear" data-path="ext.${path}">Remove</button>` : ''}</span></label>`; };
   const sel = (path, label, opts) => { const [g, k] = path.split('.'); return `<label class="field inline"><span class="label">${label}</span><select data-x-select="${path}">${Object.entries(opts).map(([v, l]) => `<option value="${v}" ${String(e[g][k]) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`; };
   return `
     <h4 class="sub">📷 Images in chat</h4>
@@ -2686,7 +2690,7 @@ function renderSettingsView(open) {
         </select><span class="hint">Your phone needs an <b>https</b> address that reaches the server (a tunnel such as KoboldCpp's Remote Tunnel or Cloudflare Tunnel), and the server must allow browser (CORS) requests.</span></label>` : ''}
       ${PROVIDERS[conn.provider].needsUrl ? settingsField('Base URL', 'conn.baseUrl', 'url', 'placeholder="https://api.example.com/v1"', conn.provider === 'textcomp' ? 'Ends in /v1 (we add /completions).' : 'The URL that ends in /v1 (we add /chat/completions). Must be https and allow browser (CORS) requests.') : ''}
       <label class="field"><span class="label">API key${conn.provider === 'openrouter' ? '<span class="hint">Get one at openrouter.ai/keys</span>' : conn.provider === 'anthropic' ? '<span class="hint">Get one at console.anthropic.com</span>' : ''}</span>
-        <input type="password" data-bind="conn.apiKey" id="api-key" placeholder="sk-…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <span class="row"><input type="password" data-bind="conn.apiKey" data-secret id="api-key" placeholder="${esc(secretHint(conn.apiKey, 'sk-…'))}" autocomplete="off" autocapitalize="off" spellcheck="false">${conn.apiKey ? `<button class="btn sm" data-action="secret-clear" data-path="conn.apiKey">Remove</button>` : ''}</span></label>
       <div class="field"><span class="label">Model</span>
         <div class="row"><input data-bind="conn.model" value="${esc(conn.model)}" placeholder="${conn.provider === 'anthropic' ? 'claude-opus-5-5' : conn.provider === 'openrouter' ? 'anthropic/claude-opus-5.5' : 'model id'}" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="btn" data-action="browse-models">Browse</button></div></div>
@@ -2957,12 +2961,7 @@ function renderSettingsView(open) {
       <p class="muted small center">PocketTavern ${VERSION}</p>
       <div class="bottom-space"></div>
     </main>`;
-  const keyField = $('#api-key');
-  if (keyField && conn) keyField.value = conn.apiKey || '';
-  document.querySelectorAll('input[data-secret][data-x]').forEach((el) => {
-    const [g, k] = el.dataset.x.split('.');
-    el.value = (S.settings.ext[g] && S.settings.ext[g][k]) || '';
-  });
+
   if (navigator.storage && navigator.storage.estimate) {
     navigator.storage.estimate().then(async (est) => {
       const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
@@ -3308,12 +3307,11 @@ const splitList = (v) => String(v || '').split(',').map((x) => x.trim()).filter(
 // ---------- backup ----------
 // Every credential field, wherever it lives (connections, image gen, TTS,
 // memory embeddings, and anything added later that follows the naming).
-const SECRET_FIELD = /(?:api|emb)Key$|secret|password|^token$/i;
 function stripSecrets(o) {
   if (Array.isArray(o)) { o.forEach(stripSecrets); return o; }
   if (o && typeof o === 'object') {
     for (const k of Object.keys(o)) {
-      if (SECRET_FIELD.test(k) && typeof o[k] === 'string') o[k] = '';
+      if (V.isSecretField(k) && typeof o[k] === 'string') o[k] = '';
       else stripSecrets(o[k]);
     }
   }
@@ -3321,14 +3319,20 @@ function stripSecrets(o) {
 }
 
 async function exportBackup() {
-  const withKeys = confirm('Include API keys in the backup?\n\nOK = include keys (keep this file private)\nCancel = leave keys out\n\nEither way the backup holds your chats, characters and personas, so only share it with people you trust.');
+  let pass = '';
+  if (confirm('Include your API keys in the backup?\n\nOK = include them, locked with a passphrase you choose (you type it again when restoring)\nCancel = leave keys out\n\nEither way the backup holds your chats, characters and personas, so only share it with people you trust.')) {
+    pass = prompt('Choose a passphrase to lock the keys in this backup.\nYou\'ll need it to restore them. Leave blank to skip the keys.') || '';
+    if (pass && prompt('Type the passphrase again:') !== pass) { toast('The passphrases didn\'t match — backup cancelled.'); return; }
+  }
   const settings = structuredClone(S.settings);
-  if (!withKeys) stripSecrets(settings);
+  const secrets = V.takeSecrets(settings);
+  stripSecrets(settings);
+  const lockedKeys = pass && V.vaultAvailable && Object.keys(secrets).length ? await V.lockForBackup(secrets, pass) : undefined;
   const data = {
     app: 'PocketTavern', version: 1, exportedAt: new Date().toISOString(),
     settings, characters: await db.getAll('characters'), chats: await db.getAll('chats'),
     presets: S.presets, lorebooks: S.lorebooks, regex: S.regex, groups: S.groups, qr: S.qr,
-    themeCss: {},
+    themeCss: {}, lockedKeys,
   };
   for (const t of (settings.appearance && settings.appearance.saved) || []) {
     if (t.hasCss) data.themeCss[t.id] = (await db.get('kv', `themecss:${t.id}`)) || '';
@@ -3404,6 +3408,13 @@ async function importBackup() {
     await savePresets(true); await saveLorebooks(true); await saveRegex(true); await saveGroups(true); await saveQr(true);
     let settingsNote = 'kept yours (they are newer)';
     if (data.settings) {
+      if (data.lockedKeys && V.vaultAvailable) {
+        for (;;) {
+          const pass = prompt('This backup has API keys locked with a passphrase. Type it to restore the keys (Cancel = restore without keys):');
+          if (!pass) break;
+          try { V.putSecrets(data.settings, await V.unlockBackup(data.lockedKeys, pass)); break; } catch { if (!confirm('Wrong passphrase. Try again?')) break; }
+        }
+      }
       const local = S.settings;
       const fresh = !(local.connections || []).length;
       const theirsNewer = fresh || (data.settings.savedAt || fileTime) > (local.savedAt || 0);
@@ -3434,7 +3445,7 @@ function mergeSettings(local, theirs, theirsNewer) {
   out.connections.forEach((c) => { if (!c.apiKey && keys.get(c.id)) c.apiKey = keys.get(c.id); });
   for (const k of Object.keys(out.ext)) {
     for (const f of Object.keys(out.ext[k])) {
-      if (SECRET_FIELD.test(f) && !out.ext[k][f]) out.ext[k][f] = ((local.ext || {})[k] || {})[f] || ((theirs.ext || {})[k] || {})[f] || '';
+      if (V.isSecretField(f) && !out.ext[k][f]) out.ext[k][f] = ((local.ext || {})[k] || {})[f] || ((theirs.ext || {})[k] || {})[f] || '';
     }
   }
   out.personas = union(a.personas, b.personas);
@@ -4069,6 +4080,13 @@ const actions = {
     rerenderSettings();
   },
   'backup-export': exportBackup,
+  'secret-clear': (el) => {
+    if (!confirm('Remove this saved key?')) return;
+    const p = el.dataset.path;
+    if (p.startsWith('ext.')) { const [, g, k] = p.split('.'); S.settings.ext[g][k] = ''; } else setPath(p, '');
+    saveSettings(true);
+    rerenderSettings();
+  },
   'backup-import': importBackup,
   wipe: async () => {
     if (!confirm('Delete ALL characters, chats and settings on this device?')) return;
@@ -4095,6 +4113,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if ('secret' in el.dataset) return; // keys are saved on change (when you finish), never half-typed
   if (el.dataset.bind && el.tagName !== 'SELECT' && el.type !== 'checkbox') {
     let v = el.value;
     if ('num' in el.dataset) {
@@ -4178,6 +4197,15 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
+  if ('secret' in el.dataset) {
+    const v = el.value.trim();
+    if (!v) return; // blank = keep the saved key (use Remove to delete it)
+    if (el.dataset.x) { const [g, k] = el.dataset.x.split('.'); S.settings.ext[g][k] = v; } else setPath(el.dataset.bind, v);
+    saveSettings(true);
+    el.value = '';
+    el.placeholder = secretHint(v);
+    return;
+  }
   if (el.dataset.bind && (el.type === 'checkbox' || el.tagName === 'SELECT')) {
     setPath(el.dataset.bind, el.type === 'checkbox' ? el.checked : el.value);
     saveSettings();
@@ -4430,7 +4458,10 @@ async function boot() {
     appearance: { ...def.appearance, ...(settings.appearance || {}) },
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
-  if (!settings) await saveSettings(true);
+  await V.loadSecrets(S.settings);
+  // Older versions stored keys in plain text: move them into the vault now.
+  const plainKeys = settings && Object.keys(V.takeSecrets(structuredClone(settings))).length;
+  if (!settings || plainKeys) await saveSettings(true);
   applyMediaPolicy();
   await applyLook();
   for (const key of ['presets', 'lorebooks', 'regex', 'groups', 'qr']) {
