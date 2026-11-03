@@ -69,7 +69,8 @@ function evalOne(body, env) {
   const now = new Date();
   switch (lower) {
     case 'user': return env.user ?? 'User';
-    case 'char': case 'group': case 'charifnotgroup': case 'groupnotmuted': return env.char ?? '';
+    case 'char': return env.char ?? '';
+    case 'group': case 'charifnotgroup': case 'groupnotmuted': return env.group ?? env.char ?? '';
     case 'persona': return env.persona ?? '';
     case 'description': return env.description ?? '';
     case 'personality': return env.personality ?? '';

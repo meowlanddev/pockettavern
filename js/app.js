@@ -8,7 +8,7 @@ import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABEL
 import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
 import { formatMessage, renderInto } from './render.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -20,7 +20,7 @@ function defaultSettings() {
       temperature: 0.9, top_p: 1, top_k: 0, min_p: 0,
       frequency_penalty: 0, presence_penalty: 0, repetition_penalty: 1,
       max_tokens: 600, context_size: 32000, stream: true,
-      claude_sampling: false, claude_effort: '',
+      claude_sampling: false, claude_effort: '', show_thoughts: false,
     },
     prompt: {
       main: DEFAULT_MAIN, post_history: '',
@@ -47,6 +47,9 @@ const S = {
   presets: [],
   lorebooks: [],
   regex: [],
+  groups: [],
+  group: null, // active group (group chats)
+  members: new Map(), // id -> character, for the active group
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -89,6 +92,7 @@ function saveKv(key, now = false) {
 const savePresets = (now) => saveKv('presets', now);
 const saveLorebooks = (now) => saveKv('lorebooks', now);
 const saveRegex = (now) => saveKv('regex', now);
+const saveGroups = (now) => saveKv('groups', now);
 
 const cardScriptCache = new WeakMap();
 function scriptsFor(char) {
@@ -115,13 +119,80 @@ function embeddedEntries(char) {
   return embeddedCache.get(book);
 }
 
-function promptFor(chat, char, history) {
+function promptFor(chat, char, history, opts = {}) {
   const conn = activeConn();
+  const inGroup = S.group && chat.groupId === S.group.id;
+  const group = inGroup ? {
+    names: groupMembers().map((c) => c.name).join(', '),
+    nameOf: (m) => (m.role === 'user' ? (activePersona().name || 'User') : ((S.members.get(m.charId) || {}).name || m.name || char.name)),
+  } : null;
   return buildPrompt({
     char, persona: activePersona(), settings: S.settings, chat, history,
     preset: activePreset(), lorebooks: S.lorebooks, regexScripts: scriptsFor(char),
-    model: conn && conn.model, embeddedEntries: embeddedEntries(char),
+    model: conn && conn.model, embeddedEntries: char._embedded || embeddedEntries(char),
+    mode: opts.mode || 'normal', group,
   });
+}
+
+// ---------- group helpers ----------
+const groupMembers = () => (S.group ? S.group.members.map((id) => S.members.get(id)).filter(Boolean) : []);
+const activeMembers = () => groupMembers().filter((c) => !(S.group.muted || []).includes(c.id));
+
+/** The character who wrote an assistant message (or null for user messages). */
+function speakerOf(msg) {
+  if (msg.role === 'user') return null;
+  if (S.group) return S.members.get(msg.charId) || { id: msg.charId, name: msg.name || '?', avatar: null };
+  return S.char;
+}
+
+const ownMacros = (c, field) => String(c[field] || '').replace(/\{\{char\}\}|<BOT>/gi, c.name);
+
+/** Card used to prompt a speaker. "Join" mode merges every member's definitions, like SillyTavern. */
+function cardForSpeaker(speaker) {
+  if (!S.group || S.group.mode !== 'join') return speaker;
+  const ms = groupMembers();
+  const join = (field, fmt) => ms.filter((c) => (c[field] || '').trim()).map((c) => fmt(c, ownMacros(c, field))).join('\n\n');
+  return {
+    ...speaker,
+    description: join('description', (c, t) => `[${c.name}]\n${t}`),
+    personality: join('personality', (c, t) => `${c.name}: ${t}`),
+    scenario: (S.group.scenario || '').trim() || speaker.scenario,
+    mes_example: join('mes_example', (c, t) => t),
+    lorebooks: [...new Set(ms.flatMap((c) => c.lorebooks || []))],
+    _embedded: ms.flatMap((c) => embeddedEntries(c)),
+  };
+}
+
+/** Who answers after a user message ("natural order" uses mentions + talkativeness, like ST). */
+function pickSpeakers(text) {
+  const ms = activeMembers();
+  if (!ms.length) return [];
+  const strategy = S.group.strategy || 'natural';
+  if (strategy === 'manual') return [];
+  if (strategy === 'list') return ms;
+  const lower = String(text || '').toLowerCase();
+  const out = [];
+  for (const c of ms) {
+    const names = [c.name, c.name.split(/\s+/)[0]].filter((n) => n && n.length > 1);
+    if (names.some((n) => new RegExp(`(^|[^\\p{L}])${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}])`, 'u').test(lower))) out.push(c);
+  }
+  for (const c of ms.slice().sort(() => Math.random() - 0.5)) {
+    if (out.includes(c)) continue;
+    const t = Number(c.extensions && c.extensions.talkativeness);
+    if (Math.random() < (Number.isFinite(t) ? t : 0.5)) out.push(c);
+  }
+  if (!out.length) out.push(ms[Math.floor(Math.random() * ms.length)]);
+  return out;
+}
+
+async function runGroupTurn(text) {
+  const speakers = pickSpeakers(text);
+  if (!speakers.length) { toast('Manual mode: tap ✨ and choose who speaks.'); return; }
+  S.stopGroup = false;
+  for (const c of speakers) {
+    if (S.stopGroup || S.chat.groupId !== S.group.id) break;
+    await runGeneration('new', c.id);
+  }
 }
 
 // Avatars must be embedded raster images, never remote URLs or active SVG.
@@ -213,10 +284,12 @@ async function render() {
   S.editing = null;
   document.documentElement.style.setProperty('--font', `${S.settings.ui.fontSize || 16}px`);
   if (r.name !== 'preset' && r.name !== 'lorebook') app.dataset.view = '';
+  if (r.name !== 'group') S.groupDraft = null;
   try {
     if (r.name === 'chat' && r.a) await renderChatView(r.a, r.b);
     else if (r.name === 'edit' && r.a) await renderEditView(r.a);
     else if (r.name === 'preset' && r.a) renderPresetView(r.a);
+    else if (r.name === 'group' && r.a) await renderGroupEditor(r.a);
     else if (r.name === 'lorebook' && r.a) renderLorebookView(r.a);
     else if (r.name === 'settings') renderSettingsView(r.a);
     else await renderHome();
@@ -233,13 +306,17 @@ async function renderHome() {
   const chars = (await db.getAll('characters')).sort((a, b) => (b.lastChatAt || b.updatedAt || 0) - (a.lastChatAt || a.updatedAt || 0));
   const conn = activeConn();
   const q = S.homeQuery || '';
-  const list = chars.filter((c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || (c.tags || []).some((t) => t.toLowerCase().includes(q.toLowerCase())));
+  const byId = new Map(chars.map((c) => [c.id, c]));
+  const groups = S.groups.map((g) => ({ ...g, isGroup: true, membersList: g.members.map((id) => byId.get(id)).filter(Boolean) }));
+  const list = [...chars, ...groups]
+    .filter((c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || (c.tags || []).some((t) => t.toLowerCase().includes(q.toLowerCase())))
+    .sort((a, b) => (b.lastChatAt || b.updatedAt || 0) - (a.lastChatAt || a.updatedAt || 0));
   app.innerHTML = `
     <header class="bar">
       <h1 class="title">PocketTavern</h1>
       <div class="spacer"></div>
       <button class="icon-btn" data-action="import-files" aria-label="Import character">${ICONS.import}</button>
-      <button class="icon-btn" data-action="go" data-to="#/edit/new" aria-label="New character">${ICONS.plus}</button>
+      <button class="icon-btn" data-action="new-menu" aria-label="New character or group">${ICONS.plus}</button>
       <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Settings">${ICONS.gear}</button>
     </header>
     <main class="scroll pad">
@@ -249,10 +326,10 @@ async function renderHome() {
       <div class="char-list">
         ${list.map((c) => `
           <button class="char-item" data-action="go" data-to="#/chat/${c.id}">
-            ${avatarHtml(c.avatar, c.name, 'av lg')}
+            ${c.isGroup ? groupAvatarHtml(c.membersList, 'lg') : avatarHtml(c.avatar, c.name, 'av lg')}
             <div class="ci-text">
-              <div class="ci-name">${esc(c.name)}</div>
-              <div class="ci-desc">${esc(macros(c.creator_notes || c.description, { char: c.name, user: activePersona().name }).replace(/\s+/g, ' ').slice(0, 140))}</div>
+              <div class="ci-name">${esc(c.name)}${c.isGroup ? ' <span class="badge">group</span>' : ''}</div>
+              <div class="ci-desc">${esc(c.isGroup ? c.membersList.map((m) => m.name).join(', ') : macros(c.creator_notes || c.description, { char: c.name, user: activePersona().name }).replace(/\s+/g, ' ').slice(0, 140))}</div>
             </div>
             <div class="ci-time">${timeAgo(c.lastChatAt)}</div>
           </button>`).join('')}
@@ -346,6 +423,71 @@ function applyPresetSamplers(p) {
   saveSettings();
 }
 
+function groupAvatarHtml(members, size = 'lg') {
+  const ms = members.slice(0, 4);
+  if (!ms.length) return `<div class="av ${size} av-fallback" style="--h:260">G</div>`;
+  return `<div class="av ${size} group-av n${ms.length}">${ms.map((c) => avatarHtml(c.avatar, c.name, 'gav')).join('')}</div>`;
+}
+
+const GROUP_STRATEGIES = { natural: 'Natural (mentions + talkativeness)', list: 'List (everyone, in order)', manual: 'Manual (you pick who speaks)' };
+
+async function renderGroupEditor(id) {
+  const chars = (await db.getAll('characters')).sort((a, b) => a.name.localeCompare(b.name));
+  let g;
+  if (S.groupDraft && (S.groupDraft.id === id || (id === 'new' && S.groupDraft.isNew))) g = S.groupDraft;
+  else if (id === 'new') g = { id: db.uid(), name: '', members: [], muted: [], strategy: 'natural', mode: 'swap', scenario: '', isNew: true };
+  else {
+    const found = S.groups.find((x) => x.id === id);
+    if (!found) throw new Error('Group not found');
+    g = structuredClone(found);
+  }
+  S.groupDraft = g;
+  const inGroup = new Set(g.members);
+  const ordered = [...g.members.map((mid) => chars.find((c) => c.id === mid)).filter(Boolean), ...chars.filter((c) => !inGroup.has(c.id))];
+  app.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn" data-action="go-back" aria-label="Back">${ICONS.back}</button>
+      <h1 class="title">${g.isNew ? 'New group' : 'Edit group'}</h1>
+      <div class="spacer"></div>
+      <button class="btn sm primary" data-action="group-save">Save</button>
+    </header>
+    <main class="scroll pad form">
+      <label class="field"><span class="label">Group name</span><input id="g-name" value="${esc(g.name)}" placeholder="e.g. The Grim Jackals" autocomplete="off"></label>
+      <div class="field"><span class="label">Members <span class="hint">(tick to add · ↑ to reorder · mute to skip their turns)</span></span>
+        ${ordered.map((c) => {
+          const on = inGroup.has(c.id);
+          return `<div class="list-row">
+            <label class="check grow"><input type="checkbox" data-g-member="${c.id}" ${on ? 'checked' : ''}> ${avatarHtml(c.avatar, c.name, 'av sm')} ${esc(c.name)}</label>
+            ${on ? `<button class="btn sm" data-action="g-up" data-id="${c.id}" aria-label="Move up">↑</button>
+              <label class="check small"><input type="checkbox" data-g-mute="${c.id}" ${(g.muted || []).includes(c.id) ? 'checked' : ''}> mute</label>` : ''}
+          </div>`;
+        }).join('') || '<p class="muted">Import some characters first.</p>'}
+      </div>
+      <label class="field"><span class="label">Who replies</span><select id="g-strategy">
+        ${Object.entries(GROUP_STRATEGIES).map(([k, v]) => `<option value="${k}" ${g.strategy === k ? 'selected' : ''}>${v}</option>`).join('')}
+      </select><span class="hint">Talkativeness comes from each card (default 50%). You can always make anyone speak from the ✨ menu.</span></label>
+      <label class="field"><span class="label">Character cards</span><select id="g-mode">
+        <option value="swap" ${g.mode !== 'join' ? 'selected' : ''}>Swap: only the speaker's card is sent</option>
+        <option value="join" ${g.mode === 'join' ? 'selected' : ''}>Join: every member's card is sent</option>
+      </select></label>
+      <label class="field"><span class="label">Group scenario <span class="hint">(optional, overrides cards' scenarios)</span></span><textarea id="g-scenario" rows="3">${esc(g.scenario || '')}</textarea></label>
+      ${g.isNew ? '' : `<button class="btn danger block" data-action="group-delete">${ICONS.trash} Delete group</button>`}
+      <div class="bottom-space"></div>
+    </main>`;
+}
+
+function collectGroupDraft() {
+  const g = S.groupDraft;
+  g.name = $('#g-name').value.trim();
+  g.strategy = $('#g-strategy').value;
+  g.mode = $('#g-mode').value;
+  g.scenario = $('#g-scenario').value;
+  const checked = new Set([...document.querySelectorAll('[data-g-member]')].filter((x) => x.checked).map((x) => x.dataset.gMember));
+  g.members = [...g.members.filter((id) => checked.has(id)), ...[...checked].filter((id) => !g.members.includes(id))];
+  g.muted = [...document.querySelectorAll('[data-g-mute]')].filter((x) => x.checked).map((x) => x.dataset.gMute).filter((id) => checked.has(id));
+  return g;
+}
+
 // ---------- CHAT ----------
 function greetingMessage(char) {
   const swipes = [char.first_mes, ...(char.alternate_greetings || [])].filter((s) => s && s.trim());
@@ -355,11 +497,17 @@ function greetingMessage(char) {
 
 async function createChat(char) {
   const now = Date.now();
+  const group = S.groups.find((g) => g.id === char.id);
+  let messages;
+  if (group) {
+    messages = group.members.map((id) => S.members.get(id)).filter(Boolean)
+      .flatMap((c) => greetingMessage(c).map((m) => ({ ...m, charId: c.id, name: c.name })));
+  } else messages = greetingMessage(char);
   const chat = {
-    id: db.uid(), charId: char.id,
+    id: db.uid(), charId: char.id, ...(group ? { groupId: group.id } : {}),
     title: new Date(now).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
     createdAt: now, updatedAt: now,
-    messages: greetingMessage(char),
+    messages,
   };
   await db.put('chats', chat);
   return chat;
@@ -368,6 +516,14 @@ async function createChat(char) {
 async function saveChat(chat) {
   chat.updatedAt = Date.now();
   await db.put('chats', chat);
+  const g = S.groups.find((x) => x.id === chat.charId);
+  if (g) {
+    g.lastChatAt = chat.updatedAt;
+    g.lastChatId = chat.id;
+    saveGroups();
+    if (S.char && S.char.id === g.id) { S.char.lastChatAt = g.lastChatAt; S.char.lastChatId = g.lastChatId; }
+    return;
+  }
   const c = await db.get('characters', chat.charId);
   if (c) {
     c.lastChatAt = chat.updatedAt;
@@ -377,8 +533,27 @@ async function saveChat(chat) {
   }
 }
 
+async function loadGroup(group) {
+  S.group = group;
+  S.members = new Map();
+  for (const id of group.members) {
+    const c = await db.get('characters', id);
+    if (c) S.members.set(id, c);
+  }
+}
+
 async function renderChatView(charId, chatId) {
-  const char = await db.get('characters', charId);
+  const group = S.groups.find((g) => g.id === charId);
+  let char;
+  if (group) {
+    await loadGroup(group);
+    const ms = groupMembers();
+    char = { id: group.id, name: group.name, avatar: (ms[0] || {}).avatar || null, isGroup: true, lastChatId: group.lastChatId };
+  } else {
+    S.group = null;
+    S.members = new Map();
+    char = await db.get('characters', charId);
+  }
   if (!char) throw new Error('Character not found');
   S.char = char;
   S.chats = (await db.byIndex('chats', 'charId', charId)).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -395,13 +570,14 @@ async function renderChatView(charId, chatId) {
     <header class="bar chat-bar">
       <button class="icon-btn" data-action="go" data-to="#/" aria-label="Back">${ICONS.back}</button>
       <button class="chat-title" data-action="chat-menu">
-        ${avatarHtml(char.avatar, char.name, 'av sm')}
-        <span class="ct-text"><span class="ct-name">${esc(char.name)}</span><span class="ct-sub">${esc(conn ? (conn.model || 'no model') : 'no connection')}</span></span>
+        ${group ? groupAvatarHtml(groupMembers(), 'sm') : avatarHtml(char.avatar, char.name, 'av sm')}
+        <span class="ct-text"><span class="ct-name">${esc(char.name)}</span><span class="ct-sub">${esc(group ? groupMembers().map((c) => c.name).join(', ') : (conn ? (conn.model || 'no model') : 'no connection'))}</span></span>
       </button>
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
     </header>
     <main class="scroll messages" id="msgs"></main>
     <footer class="composer">
+      <button class="qa-btn" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button>
       <textarea id="input" rows="1" placeholder="Message ${esc(char.name)}" enterkeyhint="${S.settings.ui.enterSends ? 'send' : 'enter'}"></textarea>
       <button class="send-btn" id="send" data-action="send" aria-label="Send">${ICONS.send}</button>
     </footer>`;
@@ -431,10 +607,12 @@ function ctxNames() {
 function msgHtml(msg, isLast) {
   const isUser = msg.role === 'user';
   const persona = activePersona();
-  const name = isUser ? persona.name : S.char.name;
-  const avatar = isUser ? persona.avatar : S.char.avatar;
+  const speaker = speakerOf(msg);
+  const name = isUser ? persona.name : speaker.name;
+  const avatar = isUser ? persona.avatar : speaker.avatar;
   const raw = msg.swipes[msg.swipeIdx] || '';
   const generatingThis = S.generating === S.chat.id && isLast && !isUser;
+  const reasoning = (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '';
   const editing = S.editing === msg.id;
   const n = msg.swipes.length;
   let body;
@@ -463,6 +641,7 @@ function msgHtml(msg, isLast) {
       ${avatarHtml(avatar, name, 'av sm')}
       <div class="bubble" data-action="toggle-msg" data-id="${msg.id}">
         <div class="name">${esc(name)}</div>
+        ${reasoning && !editing ? reasoningHtml(reasoning, generatingThis && !raw) : ''}
         ${body}
         ${swipes}
       </div>
@@ -470,13 +649,18 @@ function msgHtml(msg, isLast) {
     </div>`;
 }
 
+function reasoningHtml(text, thinking) {
+  return `<details class="reasoning" ${thinking ? 'open' : ''}><summary>${thinking ? 'Thinking…' : 'Thought process'}</summary><div class="r-body">${esc(text)}</div></details>`;
+}
+
 function displayHtml(msg) {
   const msgs = S.chat.messages;
   const depth = msgs.length - 1 - msgs.indexOf(msg);
-  const env = { char: S.char.name, user: activePersona().name || 'User', vars: { ...(S.chat.vars || {}) } };
+  const who = speakerOf(msg) || S.char;
+  const env = { char: who.name, user: activePersona().name || 'User', vars: { ...(S.chat.vars || {}) } };
   const macro = (t) => evaluateMacros(t, env);
   let text = macro(msg.swipes[msg.swipeIdx] || '');
-  text = applyRegex(text, scriptsFor(S.char), { placement: msg.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, isMarkdown: true, depth, macro });
+  text = applyRegex(text, scriptsFor(S.members.get(msg.charId) || S.char), { placement: msg.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, isMarkdown: true, depth, macro });
   return formatMessage(text);
 }
 
@@ -511,7 +695,19 @@ function updateStreamingMessage(msg) {
     const el = box.querySelector(`.msg[data-id="${msg.id}"] .text`);
     if (!el) return;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-    renderInto(el, displayHtml(msg) + '<span class="cursor"></span>');
+    const r = (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '';
+    if (r) {
+      let d = box.querySelector(`.msg[data-id="${msg.id}"] details.reasoning`);
+      if (!d) {
+        el.insertAdjacentHTML('beforebegin', reasoningHtml(r, true));
+        d = box.querySelector(`.msg[data-id="${msg.id}"] details.reasoning`);
+      }
+      d.querySelector('.r-body').textContent = r;
+      const hasText = !!(msg.swipes[msg.swipeIdx] || '').trim();
+      d.querySelector('summary').textContent = hasText ? 'Thought process' : 'Thinking…';
+      if (hasText && d.dataset.autoClosed !== '1') { d.open = false; d.dataset.autoClosed = '1'; }
+    }
+    if ((msg.swipes[msg.swipeIdx] || '').length) renderInto(el, displayHtml(msg) + '<span class="cursor"></span>');
     if (nearBottom) box.scrollTop = box.scrollHeight;
   });
 }
@@ -539,38 +735,56 @@ async function sendMessage() {
     autosize(input);
     await saveChat(chat);
     renderMessages(true);
-  } else if (!chat.messages.length || chat.messages[chat.messages.length - 1].role !== 'user') {
-    // Empty send with no pending user message: let the character continue anyway (like SillyTavern).
-    if (!chat.messages.length) return;
+  } else if (!chat.messages.length && !S.group) {
+    return;
   }
-  await runGeneration('new');
+  // Empty send with no pending user message: the character(s) just carry on (like SillyTavern).
+  if (S.group && chat.groupId === S.group.id) await runGroupTurn(text);
+  else await runGeneration('new');
 }
 
 /**
- * mode: 'new' (append a reply), 'swipe' (add an alternative to the last reply), 'regen' (replace current swipe)
+ * mode: 'new' (append a reply), 'swipe' (add an alternative to the last reply),
+ *       'regen' (replace current swipe), 'continue' (extend the last reply)
+ * speakerId: which group member speaks (group chats only)
  */
-async function runGeneration(mode) {
+async function runGeneration(mode, speakerId) {
   const conn = activeConn();
   if (!conn || !conn.model) {
     toast('Set up an API connection first (Settings → Connection).', 4000);
     return;
   }
   const chat = S.chat;
-  const char = S.char;
+  const last = chat.messages[chat.messages.length - 1];
+  let speaker = S.char;
+  if (S.group && chat.groupId === S.group.id) {
+    const id = speakerId || (mode !== 'new' && last && last.charId) || (activeMembers()[0] || {}).id;
+    speaker = S.members.get(id);
+    if (!speaker) { toast('No group member to speak.'); return; }
+  }
+  const char = cardForSpeaker(speaker);
   let msg;
   if (mode === 'new') {
     msg = { id: db.uid(), role: 'assistant', swipes: [''], swipeIdx: 0, ts: Date.now() };
+    if (S.group && chat.groupId === S.group.id) { msg.charId = speaker.id; msg.name = speaker.name; }
     chat.messages.push(msg);
   } else {
-    msg = chat.messages[chat.messages.length - 1];
+    msg = last;
     if (!msg || msg.role !== 'assistant') return;
-    if (mode === 'swipe') { msg.swipes.push(''); msg.swipeIdx = msg.swipes.length - 1; } else msg.swipes[msg.swipeIdx] = '';
+    if (mode === 'swipe') {
+      msg.swipes.push('');
+      msg.swipeIdx = msg.swipes.length - 1;
+    } else if (mode === 'regen') msg.swipes[msg.swipeIdx] = '';
     msg.greeting = false;
   }
-  const history = chat.messages.slice(0, chat.messages.indexOf(msg));
-  const { messages, vars } = promptFor(chat, char, history);
-  chat.vars = vars;
+  if (!msg.reasoning) msg.reasoning = [];
   const idx = msg.swipeIdx;
+  const original = mode === 'continue' ? (msg.swipes[idx] || '') : '';
+  const postfix = mode === 'continue' && original && !/\s$/.test(original) ? continuePostfix() : '';
+  const history = mode === 'continue' ? chat.messages.slice() : chat.messages.slice(0, chat.messages.indexOf(msg));
+  const { messages, vars } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal' });
+  chat.vars = vars;
+  const prevReasoning = msg.reasoning[idx] || '';
   S.generating = chat.id;
   S.abort = new AbortController();
   S.openActions = null;
@@ -578,12 +792,21 @@ async function runGeneration(mode) {
   updateSendButton();
   let failed = null;
   try {
+    let produced = '';
     const text = await generate(conn, S.settings.preset, messages, {
       signal: S.abort.signal,
-      onToken: (t) => { msg.swipes[idx] = t; updateStreamingMessage(msg); },
+      onToken: (t, r) => {
+        produced = t;
+        msg.swipes[idx] = original + postfix + (original ? t : t.replace(/^\s+/, ''));
+        if (r) msg.reasoning[idx] = r;
+        updateStreamingMessage(msg);
+      },
     });
-    msg.swipes[idx] = (text || msg.swipes[idx] || '').replace(/^\s+/, '');
-    if (msg.swipes[idx]) {
+    let out = (text || produced || '').replace(/^\s+/, '');
+    // Group replies sometimes start with "Name:" — drop it.
+    if (S.group && speaker.name) out = out.replace(new RegExp(`^${speaker.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*`), '');
+    msg.swipes[idx] = original ? original + (out ? postfix + out : '') : out;
+    if (msg.swipes[idx] && out) {
       const env = { char: char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
       msg.swipes[idx] = applyRegex(msg.swipes[idx], scriptsFor(char), { placement: PLACEMENT.AI, macro: (t) => evaluateMacros(t, env) });
     }
@@ -595,10 +818,15 @@ async function runGeneration(mode) {
     cancelAnimationFrame(streamRaf);
     streamRaf = 0;
   }
+  if (mode === 'continue' && !(msg.reasoning[idx] || '').trim()) msg.reasoning[idx] = prevReasoning;
   if (!msg.swipes[idx].trim()) {
     // Nothing generated: roll back the empty message / swipe.
     if (mode === 'new') chat.messages.splice(chat.messages.indexOf(msg), 1);
-    else if (mode === 'swipe') { msg.swipes.splice(idx, 1); msg.swipeIdx = Math.max(0, msg.swipes.length - 1); }
+    else if (mode === 'swipe') {
+      msg.swipes.splice(idx, 1);
+      msg.reasoning.splice(idx, 1);
+      msg.swipeIdx = Math.max(0, msg.swipes.length - 1);
+    }
   }
   msg.ts = Date.now();
   await saveChat(chat);
@@ -606,6 +834,50 @@ async function runGeneration(mode) {
   if (failed) {
     console.error(failed);
     toast(failed.message || String(failed), 8000);
+    S.stopGroup = true;
+  }
+}
+
+function continuePostfix() {
+  const p = activePreset();
+  const v = p ? (p.continue_postfix ?? (p.raw && p.raw.continue_postfix)) : undefined;
+  return typeof v === 'string' ? v : ' ';
+}
+
+/** Write the user's next message with the AI, into the input box (ST "Impersonate"). */
+async function runImpersonate() {
+  if (S.generating) return;
+  const conn = activeConn();
+  if (!conn || !conn.model) { toast('Set up an API connection first (Settings → Connection).', 4000); return; }
+  const chat = S.chat;
+  let speaker = S.char;
+  if (S.group && chat.groupId === S.group.id) {
+    const lastChar = [...chat.messages].reverse().find((m) => m.role !== 'user');
+    speaker = S.members.get(lastChar && lastChar.charId) || activeMembers()[0];
+    if (!speaker) return;
+  }
+  const { messages } = promptFor({ ...chat, vars: { ...(chat.vars || {}) } }, cardForSpeaker(speaker), chat.messages.slice(), { mode: 'impersonate' });
+  const input = $('#input');
+  S.generating = chat.id;
+  S.abort = new AbortController();
+  updateSendButton();
+  input.value = '';
+  input.placeholder = 'Writing as you…';
+  try {
+    const text = await generate(conn, S.settings.preset, messages, {
+      signal: S.abort.signal,
+      onToken: (t) => { if (S.chat === chat) { input.value = t.replace(/^\s+/, ''); autosize(input); } },
+    });
+    const name = activePersona().name;
+    const out = (text || input.value || '').replace(/^\s+/, '').replace(new RegExp(`^${(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*`), '');
+    if (S.chat === chat) { input.value = out; chat.draftInput = out; autosize(input); }
+  } catch (e) {
+    if (e.name !== 'AbortError') toast(e.message || String(e), 8000);
+  } finally {
+    S.generating = null;
+    S.abort = null;
+    input.placeholder = `Message ${S.char.name}`;
+    updateSendButton();
   }
 }
 
@@ -624,7 +896,7 @@ async function swipe(dir) {
   } else {
     // Swiping right past the last alternative generates a new one (greetings just cycle).
     if (msg.greeting) return;
-    return runGeneration('swipe');
+    return runGeneration('swipe', msg.charId);
   }
   await saveChat(S.chat);
   renderMessages();
@@ -649,16 +921,16 @@ function chatMenu() {
   const chats = S.chats.slice().sort((a, b) => b.updatedAt - a.updatedAt);
   openSheet(`
     <div class="sheet-head">
-      ${avatarHtml(S.char.avatar, S.char.name, 'av md')}
+      ${S.group ? groupAvatarHtml(groupMembers(), 'md') : avatarHtml(S.char.avatar, S.char.name, 'av md')}
       <div><div class="sh-title">${esc(S.char.name)}</div><div class="muted small">${chats.length} chat${chats.length === 1 ? '' : 's'}</div></div>
     </div>
     <div class="menu-grid">
       <button data-action="new-chat">${ICONS.plus}<span>New chat</span></button>
-      <button data-action="go" data-to="#/edit/${S.char.id}">${ICONS.edit}<span>Edit character</span></button>
+      <button data-action="go" data-to="#/${S.group ? 'group' : 'edit'}/${S.char.id}">${ICONS.edit}<span>Edit ${S.group ? 'group' : 'character'}</span></button>
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
       ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
       <button data-action="export-chat">${ICONS.download}<span>Export chat</span></button>
-      <button data-action="import-chat">${ICONS.import}<span>Import ST chat</span></button>
+      ${S.group ? '' : `<button data-action="import-chat">${ICONS.import}<span>Import ST chat</span></button>`}
       <button data-action="go" data-to="#/settings">${ICONS.gear}<span>Settings</span></button>
     </div>
     <h3 class="sheet-sub">Chats</h3>
@@ -676,6 +948,46 @@ function chatMenu() {
         </div>`;
       }).join('')}
     </div>`);
+}
+
+function quickActions() {
+  const presets = S.presets;
+  const last = S.chat.messages[S.chat.messages.length - 1];
+  const note = S.chat.authorsNote;
+  openSheet(`
+    <div class="menu-grid">
+      <button data-action="qa-continue" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.forward}<span>Continue</span></button>
+      <button data-action="qa-impersonate">${ICONS.user}<span>Impersonate</span></button>
+      <button data-action="qa-regen" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.refresh}<span>Regenerate</span></button>
+      <button data-action="qa-note">${ICONS.note}<span>Author's Note${note && note.text && note.text.trim() ? ' •' : ''}</span></button>
+      <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
+      ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
+    </div>
+    ${S.group ? `
+      <h3 class="sheet-sub">Make someone speak</h3>
+      <div class="speak-row">
+        ${groupMembers().map((c) => `<button data-action="speak" data-id="${c.id}">${avatarHtml(c.avatar, c.name, 'av md')}<span>${esc(c.name)}</span></button>`).join('')}
+      </div>` : ''}
+    <label class="field"><span class="label">Preset</span>
+      <select data-change="select-preset">
+        <option value="">Simple (built-in)</option>
+        ${presets.map((x) => `<option value="${x.id}" ${S.settings.activePreset === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+      </select></label>
+  `);
+}
+
+function authorsNoteSheet() {
+  const n = S.chat.authorsNote || { text: '', depth: 4, role: 'system' };
+  openSheet(`
+    <div class="sheet-title">Author's Note</div>
+    <p class="hint">Saved with this chat and inserted into the prompt every turn, ${'at'} the depth you choose (0 = after the last message). Macros work.</p>
+    <label class="field"><textarea id="an-text" rows="6" placeholder="e.g. [Style: slow burn. {{char}} is hiding a secret.]">${esc(n.text)}</textarea></label>
+    <div class="row wrap">
+      <label class="field" style="width:110px"><span class="label">Depth</span><input id="an-depth" inputmode="numeric" value="${n.depth ?? 4}"></label>
+      <label class="field grow"><span class="label">Role</span><select id="an-role">${['system', 'user', 'assistant'].map((r) => `<option ${n.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+    </div>
+    <button class="btn primary block" data-action="an-save">Save</button>
+  `);
 }
 
 function viewPrompt() {
@@ -696,7 +1008,7 @@ function exportChat() {
   for (const m of S.chat.messages) {
     const isUser = m.role === 'user';
     lines.push(JSON.stringify({
-      name: isUser ? persona.name : S.char.name,
+      name: isUser ? persona.name : (speakerOf(m) || S.char).name,
       is_user: isUser,
       is_system: false,
       send_date: new Date(m.ts || Date.now()).toISOString(),
@@ -904,6 +1216,7 @@ function renderSettingsView(open) {
     ${settingsField('Frequency penalty', 'preset.frequency_penalty')}
     ${settingsField('Presence penalty', 'preset.presence_penalty')}
     ${settingsField('Repetition penalty', 'preset.repetition_penalty', 'number', '', '1 = off')}
+    ${settingsField('Request & show reasoning', 'preset.show_thoughts', 'checkbox', '', "Shows the model's thinking above replies (OpenRouter reasoning models; Claude 4.6 or newer)")}
     <h4 class="sub">Claude (direct API)</h4>
     ${settingsField('Send temperature to Claude', 'preset.claude_sampling', 'checkbox', '', 'Only for older Claude models — current ones reject sampling settings.')}
     <label class="field inline"><span class="label">Reasoning effort<span class="hint">Claude direct, and OpenRouter (low–high)</span></span>
@@ -1297,7 +1610,7 @@ async function exportBackup() {
   const data = {
     app: 'PocketTavern', version: 1, exportedAt: new Date().toISOString(),
     settings, characters: await db.getAll('characters'), chats: await db.getAll('chats'),
-    presets: S.presets, lorebooks: S.lorebooks, regex: S.regex,
+    presets: S.presets, lorebooks: S.lorebooks, regex: S.regex, groups: S.groups,
   };
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1332,8 +1645,8 @@ async function importBackup() {
       const ids = new Map(S[key].map((x, i) => [x.id, i]));
       for (const x of list) { if (ids.has(x.id)) S[key][ids.get(x.id)] = x; else S[key].push(x); }
     };
-    merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex);
-    await savePresets(true); await saveLorebooks(true); await saveRegex(true);
+    merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex); merge('groups', data.groups);
+    await savePresets(true); await saveLorebooks(true); await saveRegex(true); await saveGroups(true);
     if (replaceSettings && data.settings) {
       const keep = new Map(S.settings.connections.map((c) => [c.id, c.apiKey]));
       S.settings = { ...defaultSettings(), ...data.settings };
@@ -1355,7 +1668,7 @@ const actions = {
   'import-files': importFiles,
 
   send: sendMessage,
-  stop: () => { if (S.abort) S.abort.abort(); },
+  stop: () => { S.stopGroup = true; if (S.abort) S.abort.abort(); },
   'toggle-msg': (el, e) => {
     if (S.editing) return;
     const inner = e && e.composedPath && e.composedPath()[0];
@@ -1383,7 +1696,62 @@ const actions = {
     try { await navigator.clipboard.writeText(macros(msg.swipes[msg.swipeIdx], ctxNames())); toast('Copied'); } catch { toast('Copy failed'); }
     S.openActions = null; renderMessages();
   },
-  'msg-regen': () => { if (!S.generating) runGeneration('swipe'); },
+  'msg-regen': (el) => { if (!S.generating) { const m = findMsg(el.dataset.id); runGeneration('swipe', m && m.charId); } },
+  'quick-actions': quickActions,
+  'qa-continue': () => {
+    closeSheet();
+    if (S.generating) return;
+    const last = S.chat.messages[S.chat.messages.length - 1];
+    if (last && last.role !== 'user') runGeneration('continue', last.charId);
+  },
+  'qa-impersonate': () => { closeSheet(); runImpersonate(); },
+  'qa-regen': () => {
+    closeSheet();
+    if (S.generating) return;
+    const last = S.chat.messages[S.chat.messages.length - 1];
+    if (last && last.role !== 'user') runGeneration('swipe', last.charId);
+  },
+  'qa-note': authorsNoteSheet,
+  'an-save': async () => {
+    S.chat.authorsNote = { text: $('#an-text').value, depth: numOrNull($('#an-depth').value) ?? 4, role: $('#an-role').value };
+    await saveChat(S.chat);
+    closeSheet();
+    toast(S.chat.authorsNote.text.trim() ? "Author's Note saved" : "Author's Note cleared");
+  },
+  speak: (el) => { closeSheet(); if (!S.generating) runGeneration('new', el.dataset.id); },
+  'new-menu': () => openSheet(`
+    <div class="sheet-title">Create</div>
+    <div class="menu-grid two">
+      <button data-action="go" data-to="#/edit/new">${ICONS.user}<span>New character</span></button>
+      <button data-action="go" data-to="#/group/new">${ICONS.users}<span>New group chat</span></button>
+    </div>`),
+  'group-save': async () => {
+    const g = collectGroupDraft();
+    if (!g.name) return toast('Give the group a name.');
+    if (g.members.length < 2) return toast('Pick at least two members.');
+    const isNew = g.isNew;
+    delete g.isNew;
+    g.updatedAt = Date.now();
+    if (isNew) { g.createdAt = g.updatedAt; S.groups.push(g); } else S.groups = S.groups.map((x) => (x.id === g.id ? g : x));
+    await saveGroups(true);
+    S.groupDraft = null;
+    go(`#/chat/${g.id}`);
+  },
+  'group-delete': async () => {
+    const g = S.groupDraft;
+    if (!confirm(`Delete group "${g.name}" and its chats? (The characters stay.)`)) return;
+    for (const c of await db.byIndex('chats', 'charId', g.id)) await db.del('chats', c.id);
+    S.groups = S.groups.filter((x) => x.id !== g.id);
+    await saveGroups(true);
+    S.groupDraft = null;
+    go('#/');
+  },
+  'g-up': (el) => {
+    const g = collectGroupDraft();
+    const i = g.members.indexOf(el.dataset.id);
+    if (i > 0) [g.members[i - 1], g.members[i]] = [g.members[i], g.members[i - 1]];
+    renderGroupEditor(g.isNew ? 'new' : g.id);
+  },
   'msg-delete': async (el) => {
     if (S.generating) return;
     const i = S.chat.messages.findIndex((m) => m.id === el.dataset.id);
@@ -1403,7 +1771,7 @@ const actions = {
     const i = S.chat.messages.findIndex((m) => m.id === el.dataset.id);
     const now = Date.now();
     const chat = {
-      id: db.uid(), charId: S.char.id, title: `Branch of ${S.chat.title}`.slice(0, 60), createdAt: now, updatedAt: now,
+      id: db.uid(), charId: S.char.id, ...(S.chat.groupId ? { groupId: S.chat.groupId } : {}), title: `Branch of ${S.chat.title}`.slice(0, 60), createdAt: now, updatedAt: now,
       messages: structuredClone(S.chat.messages.slice(0, i + 1)).map((m) => ({ ...m, id: db.uid() })),
     };
     await saveChat(chat);
@@ -1661,7 +2029,7 @@ const actions = {
     if (!confirm('Delete ALL characters, chats and settings on this device?')) return;
     if (!confirm('Really? This cannot be undone.')) return;
     await db.clear('characters'); await db.clear('chats'); await db.clear('kv');
-    S.presets = []; S.lorebooks = []; S.regex = [];
+    S.presets = []; S.lorebooks = []; S.regex = []; S.groups = [];
     S.settings = defaultSettings();
     await saveSettings(true);
     go('#/');
@@ -1728,6 +2096,11 @@ document.addEventListener('change', (e) => {
     return;
   }
   if ('num' in el.dataset && el.dataset.bind) el.value = getPath(el.dataset.bind);
+  if (el.dataset.gMember) {
+    const g = collectGroupDraft();
+    renderGroupEditor(g.isNew ? 'new' : g.id);
+    return;
+  }
   if (el.dataset.pmToggle !== undefined) {
     const p = presetById(S.pmId);
     p.order[+el.dataset.pmToggle].enabled = el.checked;
@@ -1780,7 +2153,8 @@ document.addEventListener('change', (e) => {
     const picked = activePreset();
     if (picked) applyPresetSamplers(picked);
     saveSettings();
-    rerenderSettings();
+    if (route().name === 'settings') rerenderSettings();
+    else { closeSheet(); toast(`Preset: ${picked ? picked.name : 'Simple'}`); }
   } else if (c === 'select-persona') {
     if (el.value === '__new') {
       const p = { id: db.uid(), name: 'New persona', description: '', avatar: null };
@@ -1811,6 +2185,11 @@ const ICONS = {
   trash: svg('<path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>', 'width="18" height="18"'),
   refresh: svg('<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.8-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>', 'width="18" height="18"'),
   branch: svg('<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/>', 'width="18" height="18"'),
+  wand: svg('<path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5"/>'),
+  forward: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+  user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
+  users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3.2-5.5 7-5.5s7 2 7 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2.3.7 4 2.4 4 5.2"/>'),
+  note: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>'),
   sliders: svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
   close: svg('<path d="M18 6L6 18M6 6l12 12"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
@@ -1830,7 +2209,7 @@ async function boot() {
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
   if (!settings) await saveSettings(true);
-  for (const key of ['presets', 'lorebooks', 'regex']) {
+  for (const key of ['presets', 'lorebooks', 'regex', 'groups']) {
     try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

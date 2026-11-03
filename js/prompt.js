@@ -2,7 +2,7 @@
 import { evaluateMacros, macros } from './macros.js';
 import { activateWorldInfo } from './worldinfo.js';
 import { applyRegex, PLACEMENT } from './regex.js';
-import { simplePreset } from './preset.js';
+import { simplePreset, DEFAULT_CONTINUE, DEFAULT_IMPERSONATE, DEFAULT_GROUP_NUDGE } from './preset.js';
 
 export { macros };
 export const estTokens = (s) => Math.ceil((s || '').length / 3.5);
@@ -36,9 +36,11 @@ function formatExamples(raw, heading) {
 /**
  * Build the message list for a generation.
  * history: messages before the one being generated (oldest first)
+ * mode: 'normal' | 'continue' (history ends with the message being continued) | 'impersonate'
+ * group: { names: 'A, B', nameOf(msg) } for group chats (names are prefixed to history, nudge added)
  * Returns { messages, stats, vars }
  */
-export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries }) {
+export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null }) {
   const P = settings.prompt;
   const samplers = settings.preset;
   const pr = preset || simplePreset(P);
@@ -70,6 +72,7 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     vars: { ...((chat && chat.vars) || {}) },
     globals: settings.globalVars || (settings.globalVars = {}),
     outlets: {},
+    group: group ? group.names : undefined,
   };
   const macro = (t) => evaluateMacros(t, env);
 
@@ -141,8 +144,16 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     const c = wiText([e]);
     if (c) injections.push({ depth: e.depth ?? 4, order: e.order, role: ROLE_NUM[e.role] || 'system', content: c });
   }
-  const an = [wiText(wi.anTop), wiText(wi.anBottom)].filter(Boolean).join('\n');
-  if (an) injections.push({ depth: 4, order: 100, role: 'system', content: an });
+  const note = chat && chat.authorsNote && chat.authorsNote.text && chat.authorsNote.text.trim() ? chat.authorsNote : null;
+  const an = [wiText(wi.anTop), note ? macro(note.text).trim() : '', wiText(wi.anBottom)].filter(Boolean).join('\n');
+  if (an) {
+    injections.push({
+      depth: note ? (Number(note.depth) || 0) : 4,
+      order: 100,
+      role: note && ['system', 'user', 'assistant'].includes(note.role) ? note.role : 'system',
+      content: an,
+    });
+  }
 
   // ---- chat history within the token budget
   const fixed = blocks.reduce((s, b) => s + (b.content ? estTokens(b.content) + 4 : 0), 0)
@@ -155,8 +166,16 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     const m = history[i];
     const depth = history.length - 1 - i;
     let text = applyRegex(msgText(m), scripts, { placement: m.role === 'user' ? PLACEMENT.USER : PLACEMENT.AI, isPrompt: true, depth, macro });
-    text = macro(text);
+    // In group chats, {{char}} inside a message means the member who wrote it.
+    const author = group && group.nameOf ? group.nameOf(m) : null;
+    if (author && m.role !== 'user') {
+      const speaking = env.char;
+      env.char = author;
+      text = macro(text);
+      env.char = speaking;
+    } else text = macro(text);
     if (!text.trim()) continue;
+    if (author) text = `${author}: ${text}`;
     const t = estTokens(text) + 4;
     if (used + t > budget && hist.length) break;
     used += t;
@@ -169,7 +188,8 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     if (!byDepth.has(d)) byDepth.set(d, []);
     byDepth.get(d).push(inj);
   }
-  const depths = [...byDepth.keys()].sort((a, b) => a - b);
+  // Deepest first, so each insertion position is still relative to the original messages.
+  const depths = [...byDepth.keys()].sort((a, b) => b - a);
   for (const d of depths) {
     const list = byDepth.get(d).sort((a, b) => a.order - b.order).map((i) => ({ role: i.role, content: i.content }));
     hist.splice(hist.length - d, 0, ...list);
@@ -183,6 +203,12 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
       messages.push(...hist);
     } else messages.push(b);
   }
+
+  // Final nudges (SillyTavern adds these at the very end of the prompt).
+  const pick = (key, def) => pr[key] || (pr.raw && pr.raw[key]) || def;
+  if (mode === 'continue') messages.push({ role: 'system', content: macro(pick('continue_nudge_prompt', DEFAULT_CONTINUE)) });
+  else if (mode === 'impersonate') messages.push({ role: 'system', content: macro(pick('impersonation_prompt', DEFAULT_IMPERSONATE)) });
+  else if (group) messages.push({ role: 'system', content: macro(pick('group_nudge_prompt', DEFAULT_GROUP_NUDGE)) });
 
   return {
     messages: messages.filter((m) => m.content && m.content.trim()),

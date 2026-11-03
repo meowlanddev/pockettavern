@@ -17,10 +17,14 @@ requests go straight from your phone to the AI provider.
   `{{trim}}`, `{{// comments}}`, `{{mesExamplesRaw}}`, `{{lastMessage}}`, time/date and more
 - Model output can contain HTML/CSS (info boards, cards); it is sanitized (DOMPurify) and rendered in a shadow root
 - Streaming chat, swipes, edit/delete/branch messages, multiple chats per character, personas
+- **Continue** and **Impersonate** (using the preset's continue/impersonation prompts), per-chat **Author's Note** at any depth
+- **Group chats**: natural / list / manual reply order, talkativeness, mentions, swap or join cards, muting, "make X speak"
+- **Reasoning display**: collapsible thought process from reasoning models (OpenRouter, Claude 4.6+)
+- Quick preset switcher inside chats
 - Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API)
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 
-Not (yet) supported: group chats, Author's Note UI, timed lorebook effects (sticky/cooldown/delay), STscript/quick replies, extensions.
+Not (yet) supported: timed lorebook effects (sticky/cooldown/delay), STscript/quick replies, extensions.
 
 ## Install on iPhone
 Open the site in Safari → Share → **Add to Home Screen**.

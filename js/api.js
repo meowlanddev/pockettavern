@@ -128,6 +128,7 @@ function openaiBody(conn, preset, messages) {
   if (preset.top_k > 0) body.top_k = preset.top_k;
   if (preset.min_p > 0) body.min_p = preset.min_p;
   if (preset.repetition_penalty && preset.repetition_penalty !== 1) body.repetition_penalty = preset.repetition_penalty;
+  if (conn.provider === 'openrouter' && preset.show_thoughts) body.include_reasoning = true;
   if (conn.provider === 'openrouter' && ['low', 'medium', 'high'].includes(preset.claude_effort)) {
     body.reasoning = { effort: preset.claude_effort };
   }
@@ -168,11 +169,13 @@ function anthropicBody(conn, preset, messages) {
   // Newer Claude models reject sampling params, so they're opt-in (for older models).
   if (preset.claude_sampling) body.temperature = Math.min(1, Math.max(0, preset.temperature));
   if (preset.claude_effort) body.output_config = { effort: preset.claude_effort };
+  // Summarized thinking so it can be shown (Claude 4.6+; older models need this off).
+  if (preset.show_thoughts) body.thinking = { type: 'adaptive', display: 'summarized' };
   return body;
 }
 
 /**
- * Generate a reply. onToken(fullTextSoFar) is called while streaming.
+ * Generate a reply. onToken(fullTextSoFar, reasoningSoFar) is called while streaming.
  * Resolves to the final text.
  */
 export async function generate(conn, preset, messages, { signal, onToken } = {}) {
@@ -185,16 +188,20 @@ export async function generate(conn, preset, messages, { signal, onToken } = {})
   if (!resp.ok) throw await apiError(resp);
 
   let text = '';
+  let reasoning = '';
   if (!body.stream) {
     const j = await resp.json();
     if (anth) {
       text = (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+      reasoning = (j.content || []).filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('\n');
       if (!text && j.stop_reason === 'refusal') throw new Error('Claude declined to respond (refusal).');
     } else {
       if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
       text = (j.choices && j.choices[0] && (j.choices[0].message?.content ?? j.choices[0].text)) || '';
+      const m = j.choices && j.choices[0] && j.choices[0].message;
+      reasoning = (m && (m.reasoning || m.reasoning_content)) || '';
     }
-    onToken && onToken(text);
+    onToken && onToken(text, reasoning);
     return text;
   }
 
@@ -206,9 +213,12 @@ export async function generate(conn, preset, messages, { signal, onToken } = {})
       let j;
       try { j = JSON.parse(data); } catch { continue; }
       if (anth) {
-        if (j.type === 'content_block_delta' && j.delta && j.delta.type === 'text_delta') {
+        if (j.type === 'content_block_delta' && j.delta && j.delta.type === 'thinking_delta') {
+          reasoning += j.delta.thinking || '';
+          onToken && onToken(text, reasoning);
+        } else if (j.type === 'content_block_delta' && j.delta && j.delta.type === 'text_delta') {
           text += j.delta.text;
-          onToken && onToken(text);
+          onToken && onToken(text, reasoning);
         } else if (j.type === 'message_delta' && j.delta) {
           stopReason = j.delta.stop_reason || stopReason;
         } else if (j.type === 'error') {
@@ -217,10 +227,12 @@ export async function generate(conn, preset, messages, { signal, onToken } = {})
       } else {
         if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
         const choice = j.choices && j.choices[0];
+        const rd = choice && choice.delta && (choice.delta.reasoning || choice.delta.reasoning_content);
+        if (rd) { reasoning += rd; onToken && onToken(text, reasoning); }
         const delta = choice && ((choice.delta && choice.delta.content) || choice.text);
         if (delta) {
           text += delta;
-          onToken && onToken(text);
+          onToken && onToken(text, reasoning);
         }
       }
     }
