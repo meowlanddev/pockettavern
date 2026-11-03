@@ -1,10 +1,12 @@
 // Keeps API keys out of plain sight.
 //
-// On the device: keys are encrypted (AES-GCM) with a device key the browser
-// generates and stores as *non-extractable* — the app can ask the browser to
-// decrypt with it, but nobody (not even the app) can read the key itself, so
-// a copy of the app's storage, a phone backup or a peek in dev tools shows
-// only scrambled bytes. No passphrase needed.
+// On the device: keys are encrypted at rest (AES-GCM) with a device key the
+// browser generates and stores as *non-extractable*: its raw bytes can't be
+// exported, so a copy of the app's storage or a phone backup shows only
+// scrambled data. This does NOT protect against a malicious script running
+// inside the app itself, which could still ask the browser to decrypt;
+// the Content Security Policy and HTML sanitizing are what guard that.
+// No passphrase needed.
 //
 // In backup files: keys are only included when protected with a passphrase
 // (PBKDF2 → AES-GCM). Without it they're left out.
@@ -72,13 +74,16 @@ async function unseal(key, box) {
   return JSON.parse(dec.decode(pt));
 }
 
-/** Settings ready to store: a copy without keys, plus the keys written encrypted. */
-export async function storeSettings(settings) {
-  if (!vaultAvailable) return settings;
+/**
+ * Split settings for storage: a copy without keys, and the keys encrypted.
+ * The caller writes both together in one transaction. The copy is taken
+ * synchronously, before any await, so it's the settings as of this call.
+ */
+export async function sealSettings(settings) {
   const copy = structuredClone(settings);
+  if (!vaultAvailable) return { settings: copy, vault: null };
   const secrets = takeSecrets(copy);
-  await db.put('kv', await seal(await getDeviceKey(), secrets), 'vault');
-  return copy;
+  return { settings: copy, vault: await seal(await getDeviceKey(), secrets) };
 }
 
 /** Fill keys from the device vault into freshly loaded settings. */

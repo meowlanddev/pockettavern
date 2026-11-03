@@ -86,10 +86,21 @@ function toast(msg, ms = 2600) {
 $('#toast').addEventListener('click', () => $('#toast').classList.remove('show'));
 
 let saveTimer;
+let saveQueue = Promise.resolve();
 function saveSettings(now = false) {
   clearTimeout(saveTimer);
   // Keys go into the encrypted device vault; the stored settings have none.
-  const doSave = () => { S.settings.savedAt = Date.now(); return V.storeSettings(S.settings).then((st) => db.put('kv', st, 'settings')); };
+  // Saves run one at a time, in order, and each writes settings + vault in a
+  // single transaction, so an older save can never overwrite a newer one.
+  const doSave = () => {
+    const job = saveQueue.then(async () => {
+      S.settings.savedAt = Date.now();
+      const { settings, vault } = await V.sealSettings(S.settings);
+      await db.putMany('kv', vault ? [[settings, 'settings'], [vault, 'vault']] : [[settings, 'settings']]);
+    });
+    saveQueue = job.catch((e) => console.error('Saving settings failed', e));
+    return job;
+  };
   if (now) return doSave();
   saveTimer = setTimeout(doSave, 400);
 }

@@ -37,6 +37,8 @@ function request(store, mode, fn) {
 
 export const get = (store, key) => request(store, 'readonly', (s) => s.get(key));
 export const getAll = (store) => request(store, 'readonly', (s) => s.getAll());
+/** Write several [value, key] pairs in ONE transaction: all land or none do. */
+export const putMany = (store, pairs) => request(store, 'readwrite', (s) => { pairs.forEach(([v, k]) => s.put(v, k)); return null; });
 export const put = (store, value, key) => request(store, 'readwrite', (s) => (key === undefined ? s.put(value) : s.put(value, key)));
 export const del = (store, key) => request(store, 'readwrite', (s) => s.delete(key));
 export const clear = (store) => request(store, 'readwrite', (s) => s.clear());
