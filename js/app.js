@@ -2661,11 +2661,10 @@ function renderSettingsView(open) {
   const p = S.settings.preset;
   const sec = (id, title, body) => `<details class="section" data-sec="${id}" ${open === id ? 'open' : ''}><summary>${title}</summary><div class="sec-body">${body}</div></details>`;
   const connBody = `
-    <label class="field"><span class="label">Profile</span>
-      <select data-change="select-conn">
+    ${S.settings.connections.length ? `<div class="field"><span class="label">Profile</span>
+      <div class="row"><select class="grow" data-change="select-conn">
         ${S.settings.connections.map((c) => `<option value="${c.id}" ${conn && c.id === conn.id ? 'selected' : ''}>${esc(c.name || PROVIDERS[c.provider].label)}</option>`).join('')}
-        <option value="__new">+ New connection…</option>
-      </select></label>
+      </select><button class="btn" data-action="conn-new">${ICONS.plus} New</button></div></div>` : `<button class="btn primary block" data-action="conn-new">${ICONS.plus} Add a connection</button>`}
     ${conn ? `
       ${settingsField('Name', 'conn.name', 'text')}
       <label class="field"><span class="label">Provider</span>
@@ -4002,6 +4001,7 @@ const actions = {
     rerenderSettings();
   },
   'test-conn': testConnection,
+  'conn-new': () => { newConnection(); saveSettings(); rerenderSettings(); toast('Connection added — choose a provider and paste your key.', 3500); },
   'delete-conn': () => {
     if (!confirm('Delete this connection profile?')) return;
     S.settings.connections = S.settings.connections.filter((c) => c.id !== S.settings.activeConnection);
