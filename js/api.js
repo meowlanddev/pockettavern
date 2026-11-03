@@ -23,7 +23,10 @@ export function baseUrl(conn) {
   return ((p.needsUrl && conn.baseUrl) ? conn.baseUrl : p.base).trim().replace(/\/+$/, '');
 }
 
-function headers(conn, json = true) {
+// If a browser refuses OpenRouter's optional attribution headers, we stop sending them.
+let openrouterPlain = false;
+
+function headers(conn, json = true, plain = false) {
   const h = {};
   if (json) h['content-type'] = 'application/json';
   if (kindOf(conn) === 'anthropic') {
@@ -33,7 +36,7 @@ function headers(conn, json = true) {
     return h;
   }
   if (conn.apiKey) h.authorization = `Bearer ${conn.apiKey}`;
-  if (conn.provider === 'openrouter') {
+  if (conn.provider === 'openrouter' && !plain && !openrouterPlain) {
     h['HTTP-Referer'] = location.origin;
     h['X-Title'] = 'PocketTavern';
   }
@@ -56,7 +59,7 @@ async function apiError(resp) {
 
 function networkError(e, conn) {
   if (e.name === 'AbortError') return e;
-  let hint = 'Network error — could not reach the server.';
+  let hint = `Network error — could not reach ${hostOf(conn)}${e && e.message ? ` (${e.message})` : ''}.`;
   const url = baseUrl(conn);
   if (url.startsWith('http://') && location.protocol === 'https:') {
     hint += ' This app runs on HTTPS, so iOS blocks plain http:// endpoints. Use an https:// URL (e.g. a tunnel).';
@@ -68,18 +71,53 @@ function networkError(e, conn) {
   return err;
 }
 
+function hostOf(conn) {
+  try { return new URL(baseUrl(conn)).host; } catch { return 'the server'; }
+}
+
 async function doFetch(conn, url, opts) {
   try {
     return await fetch(url, opts);
   } catch (e) {
+    // Retry OpenRouter once without the optional attribution headers (some browsers/blockers reject them).
+    if (e.name !== 'AbortError' && conn.provider === 'openrouter' && !openrouterPlain && opts && opts.headers && opts.headers['X-Title']) {
+      const h = { ...opts.headers };
+      delete h['HTTP-Referer'];
+      delete h['X-Title'];
+      try {
+        const r = await fetch(url, { ...opts, headers: h });
+        openrouterPlain = true;
+        return r;
+      } catch { /* fall through */ }
+    }
     throw networkError(e, conn);
+  }
+}
+
+/**
+ * Explain a connection failure: can this device reach the provider at all?
+ * (A plain GET with no headers needs no CORS preflight, so it isolates network/blocker problems.)
+ */
+export async function diagnose(conn) {
+  const host = hostOf(conn);
+  const probe = conn.provider === 'anthropic' ? 'https://api.anthropic.com/v1/models' : `${baseUrl(conn)}/models`;
+  try {
+    await fetch(probe, { method: 'GET', mode: 'cors', cache: 'no-store' });
+    return `This device can reach ${host}, so the problem is with the request itself — check the key and model, or try again.`;
+  } catch {
+    try {
+      await fetch(probe, { method: 'GET', mode: 'no-cors', cache: 'no-store' });
+      return `${host} answers, but blocks requests from this web app (CORS). For OpenRouter/Claude this shouldn't happen — tell Claude in the chat.`;
+    } catch {
+      return `This device can't reach ${host} at all. Something is blocking it: a content blocker or ad-block app, a VPN or DNS filter (e.g. NextDNS), iCloud Private Relay, or a work/school Wi-Fi. Try turning those off, or switch to mobile data, then test again.`;
+    }
   }
 }
 
 export async function listModels(conn) {
   const anth = kindOf(conn) === 'anthropic';
   const url = baseUrl(conn) + '/models' + (anth ? '?limit=1000' : '');
-  const resp = await doFetch(conn, url, { headers: headers(conn, false) });
+  const resp = await doFetch(conn, url, { headers: conn.provider === 'openrouter' ? {} : headers(conn, false) });
   if (!resp.ok) throw await apiError(resp);
   const j = await resp.json();
   const arr = Array.isArray(j) ? j : (j.data || j.models || []);

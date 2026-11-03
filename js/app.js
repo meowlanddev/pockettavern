@@ -1,7 +1,7 @@
 import * as db from './db.js';
 import { parseCardFile, blobToAvatar, exportCardPng, toV2, isPng, normalizeCard } from './card.js';
 import { buildPrompt, macros } from './prompt.js';
-import { PROVIDERS, TEXT_SERVERS, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
+import { PROVIDERS, TEXT_SERVERS, diagnose, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
 import { INSTRUCT_TEMPLATES, INSTRUCT_FIELDS, importInstruct, messagesToText } from './instruct.js';
 import * as X from './extras.js';
 import { evaluateMacros } from './macros.js';
@@ -2992,7 +2992,9 @@ async function browseModels() {
       <div class="model-list" id="model-list"></div>`;
     renderModelList('');
   } catch (e) {
-    sheet.innerHTML = `<div class="sheet-title">Models</div><p class="error">${esc(e.message)}</p><p class="muted">You can still type a model id manually.</p>`;
+    sheet.innerHTML = `<div class="sheet-title">Models</div><p class="error">${esc(e.message)}</p><p class="muted">Checking the connection…</p>`;
+    const why = /Network error/.test(e.message) ? await diagnose(conn) : '';
+    sheet.innerHTML = `<div class="sheet-title">Models</div><p class="error">${esc(e.message)}</p>${why ? `<p>${esc(why)}</p>` : ''}<p class="muted">You can still type a model id manually.</p>`;
   }
 }
 
@@ -3020,7 +3022,12 @@ async function testConnection() {
     ], { textFormat: isTextConn(conn) ? textFormatter('quiet') : null });
     toast(`Connected ✓ ${text ? '— model said: ' + text.trim().slice(0, 60) : ''}`, 4000);
   } catch (e) {
-    toast(e.message, 8000);
+    if (!/Network error/.test(e.message)) { toast(e.message, 8000); return; }
+    toast('Checking the connection…', 10000);
+    const why = await diagnose(conn);
+    openSheet(`<div class="sheet-title">Connection problem</div><p class="error">${esc(e.message)}</p><p>${esc(why)}</p>
+      <p class="hint">Quick check: open <b>${esc(PROVIDERS[conn.provider] && !PROVIDERS[conn.provider].needsUrl ? PROVIDERS[conn.provider].base + '/models' : 'your server address')}</b> in Safari. If it shows text, your phone can reach it.</p>`);
+    $('#toast').classList.remove('show');
   }
 }
 
