@@ -514,3 +514,6 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .sh-text mark { background: color-mix(in srgb, var(--accent) 45%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
 .mes.flash .bubble { animation: flash 2.4s ease; }
 @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* message HTML adapts to the chat column's width (render.js @container chat) */
+#chat { container: chat / inline-size; }

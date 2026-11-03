@@ -86,6 +86,22 @@ export function formatMessage(text) {
 
 const MESSAGE_CSS = `
 :host { display: block; contain: layout; overflow-wrap: anywhere; overflow-x: auto; }
+/* Model/preset HTML written for wide PC chats: never wider than the message. */
+[style*="width"] { max-width: 100% !important; box-sizing: border-box; }
+img, svg, video, canvas, iframe { max-width: 100% !important; height: auto; }
+/* "Bleed off the edge" negative margins only make the message scroll sideways. */
+[style*="margin-left:-"], [style*="margin-left: -"] { margin-left: 0 !important; }
+[style*="margin-right:-"], [style*="margin-right: -"] { margin-right: 0 !important; }
+/* In a narrow chat (phones, small iPad windows), stack floating pieces instead of squeezing the text beside them.
+   The container is #chat (see app.css). */
+@container chat (max-width: 640px) {
+  [style*="float"] { float: none !important; display: block; clear: both; margin: 10px 0 !important; transform: none !important; }
+  [style*="float"]:not([style*="50%"]) { width: auto !important; max-width: 100% !important; }
+  [style*="float"][style*="50%"] { margin: 10px auto !important; }
+  [style*="display:flex"], [style*="display: flex"] { flex-wrap: wrap; }
+  [style*="display:flex"] > *, [style*="display: flex"] > * { min-width: 0; }
+  table { display: block; overflow-x: auto; }
+}
 em { color: var(--em); }
 .q { color: var(--quote); }
 q { quotes: none; }
