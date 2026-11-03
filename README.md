@@ -27,7 +27,7 @@ requests go straight from your phone to the AI provider.
 - **Layered memory** inspired by [Summaryception](https://github.com/vadash/Extension-Summaryception): verbatim window, Layer 0 summaries,
   deeper merged layers, ghosted messages, `{{summaryception_memory}}`, optional Continuity Auditor (scene, bonds/gates, agendas, secrets)
 - **Appearance**: color themes, chat styles named after [Moonlit Echoes](https://github.com/RivelleDays/SillyTavern-MoonlitEchoesTheme)
-  (Flat, Document, Echo, Whisper, Hush, Ripple, Tide), avatar shapes, background image, custom CSS; imports ST UI themes and Moonlit presets
+  (Flat, Document, Echo, Whisper, Hush, Ripple, Tide), avatar shapes, background image, custom CSS; imports ST UI themes (including their custom CSS — the chat markup mirrors SillyTavern's so most theme CSS carries over) and Moonlit presets
 - Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API)
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 

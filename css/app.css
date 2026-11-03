@@ -344,7 +344,7 @@ details.reasoning .r-body { white-space: pre-wrap; border-left: 2px solid var(--
 .qr-edit input, .qr-edit textarea { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 16px; outline: none; width: 100%; resize: vertical; font-family: inherit; }
 .cmd-list { white-space: pre-wrap; font-size: .78rem; margin: 0; }
 .msg.sys { justify-content: center; }
-.msg.sys > .av { display: none; }
+.msg.sys > .mesAvatarWrapper { display: none; }
 .msg.sys .bubble { max-width: 92%; background: transparent; border-style: dashed; text-align: center; }
 .msg.sys .bubble .name { color: var(--muted); }
 
@@ -359,7 +359,8 @@ details.reasoning .r-body { white-space: pre-wrap; border-left: 2px solid var(--
 
 /* ---------- appearance: background image ---------- */
 html { background: #000; }
-body.has-bg::before { content: ''; position: fixed; inset: -20px; background: var(--bg-img) center / cover no-repeat; filter: blur(var(--bg-blur)); z-index: 0; }
+#bg1 { position: fixed; inset: -20px; z-index: 0; pointer-events: none; background-color: transparent; }
+body.has-bg #bg1 { background: var(--bg-img) center / cover no-repeat; filter: blur(var(--bg-blur)); }
 body.has-bg::after { content: ''; position: fixed; inset: 0; background: rgba(0, 0, 0, var(--bg-dim)); z-index: 0; pointer-events: none; }
 #app { z-index: 1; }
 body.has-bg .messages, body.has-bg main.scroll { background: transparent; }
@@ -379,7 +380,7 @@ u { color: var(--underline); }
 /* ---------- avatar shapes ---------- */
 body.av-rounded .av { border-radius: 28%; }
 body.av-square .av { border-radius: 6px; }
-body.av-portrait .msg > .av { border-radius: 10px; height: auto; aspect-ratio: 3 / 4; }
+body.av-portrait .msg > .mesAvatarWrapper .av { border-radius: 10px; height: auto; aspect-ratio: 3 / 4; }
 
 /* ---------- chat styles ---------- */
 /* full-width styles share this */
@@ -397,21 +398,21 @@ body.chat-flat .msg.user { background: color-mix(in srgb, var(--user) 50%, trans
 
 /* Document */
 body.chat-document .messages { padding: 18px 20px 24px; gap: 18px; }
-body.chat-document .msg > .av { display: none; }
+body.chat-document .msg > .mesAvatarWrapper { display: none; }
 body.chat-document .bubble, body.chat-document .msg.user .bubble { background: transparent; border: 0; padding: 0; border-radius: 0; }
 body.chat-document .bubble .name { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 body.chat-document .msg.user .bubble { border-left: 2px solid var(--accent); padding-left: 12px; }
 body.chat-document .msg-actions { padding-left: 0 !important; }
 
 /* Hush */
-body.chat-hush .msg > .av { display: none; }
+body.chat-hush .msg > .mesAvatarWrapper { display: none; }
 body.chat-hush .bubble, body.chat-hush .msg.user .bubble { background: transparent; border: 0; padding: 0; border-radius: 0; }
 body.chat-hush .msg + .msg { border-top: 1px solid var(--line); padding-top: 12px; }
 body.chat-hush .bubble .name::before { content: ''; display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: var(--av, var(--bg3)) center / cover; vertical-align: -6px; margin-right: 8px; }
 body.chat-hush .msg-actions { padding-left: 0 !important; }
 
 /* Echo */
-body.chat-echo .msg > .av { display: none; }
+body.chat-echo .msg > .mesAvatarWrapper { display: none; }
 body.chat-echo .bubble, body.chat-echo .msg.user .bubble { padding: 0 0 10px; border-radius: 16px; overflow: hidden; background: var(--char); }
 body.chat-echo .msg.user .bubble { background: var(--user); }
 body.chat-echo .bubble::before { content: ''; display: block; height: 170px; background: var(--av, linear-gradient(135deg, var(--bg3), var(--bg2))) center 18% / cover; -webkit-mask-image: linear-gradient(to bottom, #000 50%, transparent); mask-image: linear-gradient(to bottom, #000 50%, transparent); }
@@ -421,7 +422,7 @@ body.chat-echo .bubble > :not(.name) { margin-left: 14px; margin-right: 14px; }
 body.chat-echo .msg-actions { padding-left: 0 !important; }
 
 /* Whisper */
-body.chat-whisper .msg > .av { display: none; }
+body.chat-whisper .msg > .mesAvatarWrapper { display: none; }
 body.chat-whisper .bubble, body.chat-whisper .msg.user .bubble { position: relative; overflow: hidden; border-radius: 16px; padding-top: 60px; background: var(--char); }
 body.chat-whisper .msg.user .bubble { background: var(--user); }
 body.chat-whisper .bubble::before { content: ''; position: absolute; top: 0; right: 0; width: 60%; height: 120px; background: var(--av, none) center 20% / cover; opacity: .85; -webkit-mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent); -webkit-mask-composite: source-in; mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent); mask-composite: intersect; }
@@ -429,17 +430,39 @@ body.chat-whisper .msg[data-noav] .bubble { padding-top: 10px; }
 body.chat-whisper .bubble > * { position: relative; }
 body.chat-whisper .msg-actions { padding-left: 0 !important; }
 
-/* Ripple */
-body.chat-ripple .msg > .av { display: none; }
-body.chat-ripple .bubble, body.chat-ripple .msg.user .bubble { border-radius: 16px; display: flow-root; }
-body.chat-ripple .bubble::before { content: ''; float: left; width: 88px; height: 88px; border-radius: 50%; background: var(--av, var(--bg3)) center 20% / cover; margin: 2px 12px 6px 0; box-shadow: 0 0 0 3px var(--bg), 0 0 0 4px var(--line); }
-body.chat-ripple .msg.user .bubble::before { float: right; margin: 2px 0 6px 12px; }
-body.chat-ripple .msg[data-noav] .bubble::before { display: none; }
-body.chat-ripple .msg-actions { padding-left: 0 !important; }
+/* Ripple: the card is the whole message; the real avatar floats in it (same structure as SillyTavern + Moonlit,
+   so ST themes written for Ripple line up). */
+body.chat-ripple .msg { display: flow-root; background: var(--char); border: 1px solid var(--line); border-radius: 16px; padding: 10px 12px; }
+body.chat-ripple .msg.user { background: var(--user); }
+body.chat-ripple .msg > .mesAvatarWrapper { display: block; float: left; margin: 2px 12px 6px 0; }
+body.chat-ripple .msg.user > .mesAvatarWrapper { float: right; margin: 2px 0 6px 12px; }
+body.chat-ripple .msg > .mesAvatarWrapper .av { width: 88px; height: 88px; font-size: 2rem; }
+body.av-portrait.chat-ripple .msg > .mesAvatarWrapper .av { height: auto; aspect-ratio: 3 / 4; }
+body.chat-ripple .bubble, body.chat-ripple .msg.user .bubble { display: block; background: none; border: 0; padding: 0; border-radius: 0; max-width: none; }
+body.chat-ripple .msg-actions { padding-left: 0 !important; clear: both; padding-top: 6px; }
+@media (min-width: 700px) { body.chat-ripple .msg > .mesAvatarWrapper .av { width: 140px; height: 140px; } }
 
 /* Tide */
-body.chat-tide .msg > .av { display: none; }
+body.chat-tide .msg > .mesAvatarWrapper { display: none; }
 body.chat-tide .bubble, body.chat-tide .msg.user .bubble { position: relative; overflow: hidden; border-radius: 16px; min-height: 90px; }
 body.chat-tide .bubble::before { content: ''; position: absolute; inset: 0; background: var(--av, none) center 20% / cover; opacity: .2; }
 body.chat-tide .bubble > * { position: relative; }
 body.chat-tide .msg-actions { padding-left: 0 !important; }
+
+/* ---------- SillyTavern-compatible structure (so ST UI themes' custom CSS can apply) ---------- */
+:root {
+  --SmartThemeBodyColor: var(--text); --SmartThemeEmColor: var(--em); --SmartThemeUnderlineColor: var(--underline);
+  --SmartThemeQuoteColor: var(--quote); --SmartThemeBlurTintColor: var(--bg2); --SmartThemeChatTintColor: transparent;
+  --SmartThemeUserMesBlurTintColor: var(--user); --SmartThemeBotMesBlurTintColor: var(--char); --SmartThemeShadowColor: transparent;
+  --SmartThemeBorderColor: var(--line); --SmartThemeBlurStrength: 0px; --mainFontSize: var(--font);
+}
+.msg { --mes-avatar-url: var(--av); --mes-avatar-original-url: var(--av); }
+#sheld { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+#leftSendForm, #rightSendForm { display: flex; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.mesAvatarWrapper { flex-shrink: 0; }
+.mesAvatarWrapper .avatar { display: block; }
+.ch_name .flex-container, .ch_name .alignItemsBaseline { display: inline; }
+.msg .timestamp, .msg .mesIDDisplay { display: none; }
+body.show-timestamps .msg .timestamp { display: block; font-size: .7rem; color: var(--muted); font-weight: 400; margin-top: 1px; }
+.mes.user .ch_name { text-align: right; }
+body:not(.chat-bubble) .mes.user .ch_name { text-align: left; }

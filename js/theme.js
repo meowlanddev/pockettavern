@@ -54,6 +54,10 @@ export const COLOR_FIELDS = [
   ['bg', 'Background'], ['bg2', 'Panels'], ['user', 'Your messages'], ['char', 'Character messages'], ['line', 'Borders'],
 ];
 
+// SillyTavern body classes for each chat style (ST: bubblechat/documentstyle; Moonlit: echostyle…)
+const ST_BODY_CLASS = { bubble: 'bubblechat', document: 'documentstyle', flat: 'flatchat', echo: 'echostyle', whisper: 'whisperstyle', hush: 'hushstyle', ripple: 'ripplestyle', tide: 'tidestyle' };
+const ST_CLASSES = Object.values(ST_BODY_CLASS);
+
 export const DEFAULT_APPEARANCE = Object.freeze({
   theme: 'midnight',
   colors: {},
@@ -64,6 +68,8 @@ export const DEFAULT_APPEARANCE = Object.freeze({
   bgBlur: 0,
   customCss: '',
   saved: [],
+  useThemeCss: true,
+  timestamps: false,
 });
 
 /** Full palette = theme + user overrides. */
@@ -73,7 +79,11 @@ export function paletteOf(app) {
   return { ...base, ...(app.colors || {}) };
 }
 
-export function applyAppearance(app) {
+/**
+ * Apply appearance. themeCss = custom CSS that came with an imported SillyTavern theme (or '').
+ * Returns the message-text rules rewritten for shadow roots (see shadowRulesFrom).
+ */
+export function applyAppearance(app, themeCss = '') {
   const p = paletteOf(app);
   const r = document.documentElement.style;
   const set = (k, v) => r.setProperty(k, v);
@@ -88,6 +98,13 @@ export function applyAppearance(app) {
   [...b].filter((c) => c.startsWith('chat-') || c.startsWith('av-')).forEach((c) => b.remove(c));
   b.add(`chat-${CHAT_STYLES[app.chatStyle] ? app.chatStyle : 'bubble'}`);
   b.add(`av-${AVATAR_SHAPES[app.avatarShape] ? app.avatarShape : 'circle'}`);
+  ST_CLASSES.forEach((c) => b.remove(c));
+  b.add(ST_BODY_CLASS[app.chatStyle] || 'bubblechat');
+  b.toggle('show-timestamps', !!app.timestamps);
+  b.toggle('no-timestamps', !app.timestamps);
+  b.add('no-mesIDDisplay', 'no-timer', 'no-tokenCount');
+  const stOn = !!themeCss && app.useThemeCss !== false;
+  b.toggle('st-theme', stOn);
   // Only embedded raster images, so a shared backup can't inject CSS through this value.
   const img = typeof app.bgImage === 'string' && /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(app.bgImage) ? app.bgImage : null;
   b.toggle('has-bg', !!img);
@@ -97,6 +114,73 @@ export function applyAppearance(app) {
   let css = document.getElementById('custom-css');
   if (!css) { css = document.createElement('style'); css.id = 'custom-css'; document.head.appendChild(css); }
   css.textContent = app.customCss || '';
+  let st = document.getElementById('st-theme-css');
+  if (!st) { st = document.createElement('style'); st.id = 'st-theme-css'; document.head.appendChild(st); }
+  st.textContent = stOn ? themeCss : '';
+  return stOn ? shadowRulesFrom(themeCss) : '';
+}
+
+/**
+ * Message text is rendered in shadow roots, so theme rules like
+ * "#chat .mes[is_user=false] .mes_text em { … }" can't reach it. Rewrite them to
+ * ":host([is_user="false"]) em { … }" for use inside the shadow root.
+ */
+let shadowMemo = { key: '', value: '' };
+export function shadowRulesFrom(css) {
+  const key = `${css.length}:${css.slice(0, 200)}:${document.body.className}`;
+  if (shadowMemo.key === key) return shadowMemo.value;
+  const value = computeShadowRules(css);
+  shadowMemo = { key, value };
+  return value;
+}
+
+function computeShadowRules(css) {
+  const out = [];
+  const bodyClasses = new Set(document.body.classList);
+  const walk = (src) => {
+    let i = 0;
+    while (i < src.length) {
+      const open = src.indexOf('{', i);
+      if (open < 0) break;
+      const selector = src.slice(i, open).trim();
+      let depth = 1;
+      let j = open + 1;
+      let quote = null;
+      for (; j < src.length && depth; j++) {
+        const ch = src[j];
+        if (quote) { if (ch === quote && src[j - 1] !== '\\') quote = null; continue; }
+        if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      const body = src.slice(open + 1, j - 1);
+      i = j;
+      const sel = selector.replace(/^[;\s]*(?:@import[^;]*;\s*|@charset[^;]*;\s*)*/g, '').trim();
+      if (sel.startsWith('@media') || sel.startsWith('@supports')) {
+        const before = out.length;
+        walk(body);
+        if (out.length > before) out.splice(before, 0, `${sel}{`), out.push('}');
+        continue;
+      }
+      if (sel.startsWith('@')) continue;
+      if (!sel.includes('.mes_text')) continue;
+      const parts = sel.split(/,(?![^(]*\))/).map((x) => x.trim()).filter((x) => x.includes('.mes_text'));
+      const rewritten = [];
+      for (const part of parts) {
+        const at = part.lastIndexOf('.mes_text');
+        const ancestors = part.slice(0, at);
+        const rest = part.slice(at + 9);
+        const needed = [...ancestors.matchAll(/body((?:\.[\w-]+)+)/g)].flatMap((m) => m[1].split('.').filter(Boolean));
+        if (needed.some((c) => !bodyClasses.has(c))) continue;
+        const who = ancestors.match(/\[is_user=["']?(true|false)["']?\]/);
+        if (/^[\w-]/.test(rest)) continue; // e.g. ".mes_textarea" — a different class
+        rewritten.push(`${who ? `:host([is_user="${who[1]}"])` : ':host'}${rest}`);
+      }
+      if (rewritten.length) out.push(`${rewritten.join(', ')}{${body}}`);
+    }
+  };
+  walk(css.replace(/\/\*[\s\S]*?\*\//g, ''));
+  return out.join('\n');
 }
 
 const asNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -118,6 +202,7 @@ export function importThemeFile(json, fallbackName) {
     return { name: json.presetName || fallbackName, colors };
   }
   if (json && ('main_text_color' in json || 'chat_display' in json || 'quote_text_color' in json)) {
+    const named = String(json.name || '').match(/\b(echo|whisper|hush|ripple|tide)\b/i);
     const colors = {};
     const map = { main_text_color: 'text', italics_text_color: 'em', quote_text_color: 'quote', underline_text_color: 'underline', user_mes_blur_tint_color: 'user', bot_mes_blur_tint_color: 'char' };
     for (const [k, v] of Object.entries(map)) if (json[k]) colors[v] = json[k];
@@ -127,6 +212,9 @@ export function importThemeFile(json, fallbackName) {
     const out = { name: json.name || fallbackName, colors };
     const d = asNum(json.chat_display);
     if (d !== null && DISPLAY_NUM[d]) out.chatStyle = DISPLAY_NUM[d];
+    else if (named) out.chatStyle = named[1].toLowerCase();
+    if (typeof json.custom_css === 'string' && json.custom_css.trim()) out.css = json.custom_css;
+    if (typeof json.timestamps_enabled === 'boolean') out.timestamps = json.timestamps_enabled;
     const a = asNum(json.avatar_style);
     if (a !== null) out.avatarShape = ['circle', 'portrait', 'square', 'rounded'][a] || 'circle';
     return out;

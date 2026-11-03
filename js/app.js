@@ -6,13 +6,13 @@ import { evaluateMacros } from './macros.js';
 import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './worldinfo.js';
 import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
 import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
-import { formatMessage, renderInto } from './render.js';
+import { formatMessage, renderInto, setThemeShadowCss } from './render.js';
 import { runScript } from './stscript.js';
 import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
 import * as MEM from './memory.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -83,6 +83,26 @@ function saveSettings(now = false) {
   const doSave = () => db.put('kv', S.settings, 'settings');
   if (now) return doSave();
   saveTimer = setTimeout(doSave, 400);
+}
+
+/** Apply the appearance settings, including an imported SillyTavern theme's custom CSS. */
+async function applyLook() {
+  const a = S.settings.appearance;
+  const t = (a.saved || []).find((x) => x.id === a.theme);
+  let css = '';
+  if (t && t.hasCss) {
+    if (S.themeCssId !== t.id) {
+      try { S.themeCss = (await db.get('kv', `themecss:${t.id}`)) || ''; } catch { S.themeCss = ''; }
+      S.themeCssId = t.id;
+    }
+    css = S.themeCss;
+  }
+  const shadow = applyAppearance(a, css);
+  if (shadow !== S.lastShadowCss) {
+    S.lastShadowCss = shadow;
+    setThemeShadowCss(shadow);
+    if (route().name === 'chat' && S.chat && $('#chat')) renderMessages();
+  }
 }
 
 const activeConn = () => S.settings.connections.find((c) => c.id === S.settings.activeConnection) || null;
@@ -316,7 +336,7 @@ async function quietGenerate(quietPrompt, { onToken, maxTokens, signal, chat = S
 // ---------- Enhance My Reply ----------
 async function enhanceDraft() {
   if (S.generating) return;
-  const input = $('#input');
+  const input = $('#send_textarea');
   const draft = input && input.value.trim();
   if (!draft) { toast('Write a draft before enhancing it.'); input && input.focus(); return; }
   const chat = S.chat;
@@ -344,7 +364,7 @@ async function enhanceDraft() {
 function restoreDraft() {
   const o = S.enhanceOriginal;
   if (!o || o.chatId !== S.chat.id) return toast('No enhanced draft to restore.');
-  const input = $('#input');
+  const input = $('#send_textarea');
   input.value = o.text;
   S.chat.draftInput = o.text;
   S.enhanceOriginal = null;
@@ -355,7 +375,7 @@ function restoreDraft() {
 
 function updateEnhanceButton() {
   const b = $('#enh-btn');
-  const input = $('#input');
+  const input = $('#send_textarea');
   if (b && input) b.hidden = !S.settings.ext.enhance.enabled || !input.value.trim();
 }
 
@@ -448,7 +468,7 @@ function scriptApi(chat) {
     impersonate: () => runImpersonate(),
     cont: () => runGeneration('continue', lastSpeakerId()),
     regen: () => runGeneration('swipe', lastSpeakerId()),
-    setInput: (t) => { const i = $('#input'); if (i) { i.value = t; chat.draftInput = t; autosize(i); updateEnhanceButton(); } },
+    setInput: (t) => { const i = $('#send_textarea'); if (i) { i.value = t; chat.draftInput = t; autosize(i); updateEnhanceButton(); } },
     input: async (p, def) => window.prompt(p || 'Input', def) ?? '',
     popup: async (t) => window.alert(t),
     echo: (t) => toast(t, 4000),
@@ -471,9 +491,9 @@ function scriptApi(chat) {
       chatstyle: (arg) => {
         const v = String(arg || '').trim().toLowerCase().replace(/style$/, '');
         if (!CHAT_STYLES[v]) throw new Error(`Chat styles: ${Object.keys(CHAT_STYLES).join(', ')}`);
-        S.settings.appearance.chatStyle = v; saveSettings(); applyAppearance(S.settings.appearance);
+        S.settings.appearance.chatStyle = v; saveSettings(); applyLook();
       },
-      ...Object.fromEntries(Object.keys(CHAT_STYLES).map((k) => [`${k}style`, () => { S.settings.appearance.chatStyle = k; saveSettings(); applyAppearance(S.settings.appearance); }])),
+      ...Object.fromEntries(Object.keys(CHAT_STYLES).map((k) => [`${k}style`, () => { S.settings.appearance.chatStyle = k; saveSettings(); applyLook(); }])),
     },
     persona: (name) => {
       const p = S.settings.personas.find((x) => x.name.toLowerCase() === String(name).trim().toLowerCase());
@@ -501,7 +521,7 @@ async function runQuickReply(setId, id) {
   if (S.generating) return toast('Wait for the current reply (or tap stop).');
   const text = b.message.trim();
   if (text.startsWith('/')) return runSlash(text);
-  const input = $('#input');
+  const input = $('#send_textarea');
   input.value = scriptApi(S.chat).macro(text);
   return sendMessage();
 }
@@ -757,12 +777,18 @@ async function importFiles() {
         const theme = importThemeFile(json, base);
         if (theme) {
           const a = S.settings.appearance;
-          const t = { id: db.uid(), name: String(theme.name).replace(/^\[Moonlit\]\s*/, '').slice(0, 40), colors: { ...paletteOf({ theme: 'midnight', colors: {} }), ...theme.colors } };
+          const t = { id: db.uid(), name: String(theme.name).replace(/^\[Moonlit\]\s*/, '').slice(0, 60), colors: { ...paletteOf({ theme: 'midnight', colors: {} }), ...theme.colors } };
+          if (theme.css) {
+            await db.put('kv', theme.css, `themecss:${t.id}`);
+            t.hasCss = true;
+            a.useThemeCss = confirm(`"${t.name}" comes with custom CSS from its author (${Math.round(theme.css.length / 1024)} KB, written for SillyTavern's layout).\n\nApply it? Most of it should carry over; some parts may look different on PocketTavern. Only use theme files from people you trust. You can turn it off any time in Settings → Appearance.`);
+          }
           a.saved = [...(a.saved || []), t];
           a.theme = t.id; a.colors = {};
           if (theme.chatStyle) a.chatStyle = theme.chatStyle;
           if (theme.avatarShape) a.avatarShape = theme.avatarShape;
-          applyAppearance(a);
+          if (typeof theme.timestamps === 'boolean') a.timestamps = theme.timestamps;
+          await applyLook();
           saveSettings();
           done.themes = (done.themes || 0) + 1;
           continue;
@@ -962,7 +988,7 @@ async function renderChatView(charId, chatId) {
   S.chat = chat;
   const conn = activeConn();
   app.innerHTML = `
-    <header class="bar chat-bar">
+    <header class="bar chat-bar" id="top-bar">
       <button class="icon-btn" data-action="go" data-to="#/" aria-label="Back">${ICONS.back}</button>
       <button class="chat-title" data-action="chat-menu">
         ${group ? groupAvatarHtml(groupMembers(), 'sm') : avatarHtml(char.avatar, char.name, 'av sm')}
@@ -970,15 +996,19 @@ async function renderChatView(charId, chatId) {
       </button>
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
     </header>
-    <main class="scroll messages" id="msgs"></main>
-    ${qrBarHtml()}
-    <footer class="composer">
-      <button class="qa-btn" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button>
-      <textarea id="input" rows="1" placeholder="Message ${esc(char.name)}" enterkeyhint="${S.settings.ui.enterSends ? 'send' : 'enter'}"></textarea>
-      <button class="enh-btn" id="enh-btn" data-action="enhance" aria-label="Enhance reply" title="Enhance reply" hidden>✨</button>
-      <button class="send-btn" id="send" data-action="send" aria-label="Send">${ICONS.send}</button>
-    </footer>`;
-  const input = $('#input');
+    <div id="sheld">
+      <main class="scroll messages" id="chat"></main>
+      ${qrBarHtml()}
+      <footer class="composer" id="send_form">
+        <div id="leftSendForm"><button class="qa-btn" id="options_button" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button></div>
+        <textarea id="send_textarea" rows="1" placeholder="Message ${esc(char.name)}" enterkeyhint="${S.settings.ui.enterSends ? 'send' : 'enter'}"></textarea>
+        <div id="rightSendForm">
+          <button class="enh-btn" id="enh-btn" data-action="enhance" aria-label="Enhance reply" title="Enhance reply" hidden>✨</button>
+          <button class="send-btn" id="send_but" data-action="send" aria-label="Send">${ICONS.send}</button>
+        </div>
+      </footer>
+    </div>`;
+  const input = $('#send_textarea');
   input.value = S.chat.draftInput || '';
   autosize(input);
   input.addEventListener('input', () => { autosize(input); S.chat.draftInput = input.value; updateEnhanceButton(); });
@@ -1018,14 +1048,15 @@ function msgHtml(msg, isLast) {
     body = `<textarea class="edit-box" id="edit-box">${esc(raw)}</textarea>
       <div class="row end"><button class="btn sm" data-action="edit-cancel">Cancel</button><button class="btn sm primary" data-action="edit-save" data-id="${msg.id}">Save</button></div>`;
   } else {
-    body = raw ? `<div class="text" data-mid="${msg.id}"></div>`
-      : `<div class="text">${generatingThis ? '<span class="typing"><i></i><i></i><i></i></span>' : '<span class="muted">(empty)</span>'}</div>`;
+    const who = `is_user="${isUser}"`;
+    body = raw ? `<div class="text mes_text" data-mid="${msg.id}" ${who}></div>`
+      : `<div class="text mes_text" ${who}>${generatingThis ? '<span class="typing"><i></i><i></i><i></i></span>' : '<span class="muted">(empty)</span>'}</div>`;
   }
   const swipes = (msg.role === 'assistant' && isLast && !editing && (n > 1 || !msg.greeting))
     ? `<div class="swipes">
-        <button class="sw-btn" data-action="swipe" data-dir="-1" ${msg.swipeIdx === 0 || generatingThis ? 'disabled' : ''} aria-label="Previous swipe">${ICONS.left}</button>
-        <span>${msg.swipeIdx + 1}/${n}</span>
-        <button class="sw-btn" data-action="swipe" data-dir="1" ${generatingThis ? 'disabled' : ''} aria-label="Next swipe">${ICONS.right}</button>
+        <button class="sw-btn swipe_left" data-action="swipe" data-dir="-1" ${msg.swipeIdx === 0 || generatingThis ? 'disabled' : ''} aria-label="Previous swipe">${ICONS.left}</button>
+        <span class="swipes-counter">${msg.swipeIdx + 1}/${n}</span>
+        <button class="sw-btn swipe_right" data-action="swipe" data-dir="1" ${generatingThis ? 'disabled' : ''} aria-label="Next swipe">${ICONS.right}</button>
       </div>` : '';
   const actions = S.openActions === msg.id && !editing ? `
     <div class="msg-actions">
@@ -1038,10 +1069,13 @@ function msgHtml(msg, isLast) {
   const sp = isUser ? 'user' : (speaker && speaker.id) || '';
   const live = msg.audit && msg.audit.swipe === msg.swipeIdx;
   const isLiveAudit = live && S.liveAuditId === msg.id;
-  return `<div class="msg ${isUser ? 'user' : msg.role === 'system' ? 'sys' : 'char'}${msg.ghost ? ' ghost' : ''}" data-id="${msg.id}" data-sp="${esc(sp)}"${avatar ? '' : ' data-noav'}>
-      ${avatarHtml(avatar, name, 'av sm')}
-      <div class="bubble" data-action="toggle-msg" data-id="${msg.id}">
-        <div class="name">${esc(name)}${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>
+  // Markup mirrors SillyTavern's (#chat .mes .mes_block .ch_name .name_text …) so ST UI themes' custom CSS applies.
+  const mesid = S.chat.messages.indexOf(msg);
+  const when = msg.ts ? new Date(msg.ts).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  return `<div class="msg mes ${isUser ? 'user' : msg.role === 'system' ? 'sys smallSysMes' : 'char'}${msg.ghost ? ' ghost' : ''}${isLast ? ' last_mes' : ''}" data-id="${msg.id}" data-sp="${esc(sp)}" mesid="${mesid}" swipeid="${msg.swipeIdx}" is_user="${isUser}" is_system="${msg.role === 'system'}" ch_name="${esc(name)}"${avatar ? '' : ' data-noav'}>
+      <div class="mesAvatarWrapper"><div class="avatar">${avatarHtml(avatar, name, 'av sm')}</div></div>
+      <div class="bubble mes_block" data-action="toggle-msg" data-id="${msg.id}">
+        <div class="name ch_name"><div class="flex-container"><div class="alignItemsBaseline"><span class="name_text">${esc(name)}</span>${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>${when ? `<small class="timestamp">${esc(when)}</small>` : ''}<small class="mesIDDisplay">#${mesid}</small></div></div>
         ${reasoning && !editing ? reasoningHtml(reasoning, generatingThis && !raw) : ''}
         ${body}
         ${swipes}
@@ -1073,7 +1107,7 @@ function hydrateMessages(box) {
 }
 
 function renderMessages(scrollBottom = false) {
-  const box = $('#msgs');
+  const box = $('#chat');
   if (!box) return;
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   const msgs = S.chat.messages;
@@ -1094,7 +1128,7 @@ function updateStreamingMessage(msg) {
   if (streamRaf) return;
   streamRaf = requestAnimationFrame(() => {
     streamRaf = 0;
-    const box = $('#msgs');
+    const box = $('#chat');
     if (!box || !S.generating || !S.chat || !S.chat.messages.includes(msg)) return;
     const el = box.querySelector(`.msg[data-id="${msg.id}"] .text`);
     if (!el) return;
@@ -1117,7 +1151,7 @@ function updateStreamingMessage(msg) {
 }
 
 function updateSendButton() {
-  const btn = $('#send');
+  const btn = $('#send_but');
   if (!btn) return;
   const busy = S.generating && S.chat && S.generating === S.chat.id;
   btn.innerHTML = busy ? ICONS.stop : ICONS.send;
@@ -1127,7 +1161,7 @@ function updateSendButton() {
 
 async function sendMessage() {
   if (S.generating) return toast('Wait for the current reply (or tap stop).');
-  const input = $('#input');
+  const input = $('#send_textarea');
   const text = input.value.trim();
   const chat = S.chat;
   if (text.startsWith('/') && /^\/[a-z#]/i.test(text)) {
@@ -1273,7 +1307,7 @@ async function runImpersonate() {
     if (!speaker) return;
   }
   const { messages } = promptFor({ ...chat, vars: { ...(chat.vars || {}) } }, cardForSpeaker(speaker), chat.messages.slice(), { mode: 'impersonate' });
-  const input = $('#input');
+  const input = $('#send_textarea');
   S.generating = chat.id;
   S.abort = new AbortController();
   updateSendButton();
@@ -1321,7 +1355,7 @@ async function swipe(dir) {
 // Horizontal swipe gesture on the last character message.
 let touchStart = null;
 document.addEventListener('touchstart', (e) => {
-  const bubble = e.target.closest('#msgs .msg.char:last-child .bubble');
+  const bubble = e.target.closest('#chat .msg.char:last-child .bubble');
   touchStart = bubble && e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
 }, { passive: true });
 document.addEventListener('touchend', (e) => {
@@ -1615,7 +1649,8 @@ function renderSettingsView(open) {
           ${Object.entries(PROVIDERS).map(([k, v]) => `<option value="${k}" ${conn.provider === k ? 'selected' : ''}>${v.label}</option>`).join('')}
         </select></label>
       ${PROVIDERS[conn.provider].needsUrl ? settingsField('Base URL', 'conn.baseUrl', 'url', 'placeholder="https://api.example.com/v1"', 'The URL that ends in /v1 (we add /chat/completions). Must be https and allow browser (CORS) requests.') : ''}
-      ${settingsField('API key', 'conn.apiKey', 'password', 'placeholder="sk-…"', conn.provider === 'openrouter' ? 'Get one at openrouter.ai/keys' : conn.provider === 'anthropic' ? 'Get one at console.anthropic.com' : '')}
+      <label class="field"><span class="label">API key${conn.provider === 'openrouter' ? '<span class="hint">Get one at openrouter.ai/keys</span>' : conn.provider === 'anthropic' ? '<span class="hint">Get one at console.anthropic.com</span>' : ''}</span>
+        <input type="password" data-bind="conn.apiKey" id="api-key" placeholder="sk-…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <div class="field"><span class="label">Model</span>
         <div class="row"><input data-bind="conn.model" value="${esc(conn.model)}" placeholder="${conn.provider === 'anthropic' ? 'claude-opus-5-5' : conn.provider === 'openrouter' ? 'anthropic/claude-opus-5.5' : 'model id'}" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="btn" data-action="browse-models">Browse</button></div></div>
@@ -1730,6 +1765,8 @@ function renderSettingsView(open) {
     <div class="style-grid">
       ${Object.entries(CHAT_STYLES).map(([k, v]) => `<button class="${ap.chatStyle === k ? 'on' : ''}" data-action="ap-style" data-v="${k}"><b>${v.label}</b><span>${v.hint}</span></button>`).join('')}
     </div>
+    ${(ap.saved || []).some((t) => t.id === ap.theme && t.hasCss) ? `<label class="toggle"><span><span class="label">Use this theme's custom CSS</span><span class="hint">Written for SillyTavern's layout; most of it carries over. Turn off if something looks broken.</span></span><input type="checkbox" data-ap-toggle="useThemeCss" ${ap.useThemeCss !== false ? 'checked' : ''}><i></i></label>` : ''}
+    <label class="toggle"><span><span class="label">Show timestamps</span></span><input type="checkbox" data-ap-toggle="timestamps" ${ap.timestamps ? 'checked' : ''}><i></i></label>
     <label class="field inline"><span class="label">Avatar shape</span><select data-ap-select="avatarShape">
       ${Object.entries(AVATAR_SHAPES).map(([k, v]) => `<option value="${k}" ${ap.avatarShape === k ? 'selected' : ''}>${v}</option>`).join('')}
     </select></label>
@@ -1845,6 +1882,8 @@ function renderSettingsView(open) {
       <p class="muted small center">PocketTavern ${VERSION}</p>
       <div class="bottom-space"></div>
     </main>`;
+  const keyField = $('#api-key');
+  if (keyField && conn) keyField.value = conn.apiKey || '';
   if (navigator.storage && navigator.storage.estimate) {
     navigator.storage.estimate().then(async (est) => {
       const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
@@ -2198,7 +2237,11 @@ async function exportBackup() {
     app: 'PocketTavern', version: 1, exportedAt: new Date().toISOString(),
     settings, characters: await db.getAll('characters'), chats: await db.getAll('chats'),
     presets: S.presets, lorebooks: S.lorebooks, regex: S.regex, groups: S.groups, qr: S.qr,
+    themeCss: {},
   };
+  for (const t of (settings.appearance && settings.appearance.saved) || []) {
+    if (t.hasCss) data.themeCss[t.id] = (await db.get('kv', `themecss:${t.id}`)) || '';
+  }
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   await saveFile(new Blob([JSON.stringify(data)], { type: 'application/json' }), `pockettavern-backup-${stamp}.json`);
@@ -2232,6 +2275,10 @@ async function importBackup() {
       const ids = new Map(S[key].map((x, i) => [x.id, i]));
       for (const x of list) { if (ids.has(x.id)) S[key][ids.get(x.id)] = x; else S[key].push(x); }
     };
+    if (data.themeCss && typeof data.themeCss === 'object') {
+      for (const [id, css] of Object.entries(data.themeCss)) if (/^[A-Za-z0-9_-]+$/.test(id) && typeof css === 'string') await db.put('kv', css, `themecss:${id}`);
+      S.themeCssId = null;
+    }
     merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex); merge('groups', data.groups); merge('qr', data.qr);
     await savePresets(true); await saveLorebooks(true); await saveRegex(true); await saveGroups(true); await saveQr(true);
     if (replaceSettings && data.settings) {
@@ -2240,7 +2287,7 @@ async function importBackup() {
       S.settings.connections.forEach((c) => { if (!c.apiKey && keep.get(c.id)) c.apiKey = keep.get(c.id); });
       S.settings.appearance = { ...structuredClone(DEFAULT_APPEARANCE), ...(S.settings.appearance || {}) };
       S.settings.ext = { ...defaultSettings().ext, ...(S.settings.ext || {}) };
-      applyAppearance(S.settings.appearance);
+      applyLook();
       await saveSettings(true);
     }
     toast('Backup restored');
@@ -2300,15 +2347,15 @@ const actions = {
     m.l0Prompt = MEM.DEFAULT_L0_PROMPT; m.mergePrompt = MEM.DEFAULT_MERGE_PROMPT; m.auditorPrompt = MEM.DEFAULT_AUDITOR_PROMPT;
     saveSettings(); rerenderSettings();
   },
-  'ap-style': (el) => { S.settings.appearance.chatStyle = el.dataset.v; saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings(); },
+  'ap-style': (el) => { S.settings.appearance.chatStyle = el.dataset.v; saveSettings(); applyLook(); rerenderSettings(); },
   'ap-bg': async () => {
     const [f] = await pickFile('file-avatar');
     if (!f) return;
     S.settings.appearance.bgImage = await blobToAvatar(f, 1600);
-    saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings();
+    saveSettings(); applyLook(); rerenderSettings();
   },
-  'ap-bg-remove': () => { S.settings.appearance.bgImage = null; saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings(); },
-  'ap-reset-colors': () => { S.settings.appearance.colors = {}; saveSettings(); applyAppearance(S.settings.appearance); rerenderSettings(); },
+  'ap-bg-remove': () => { S.settings.appearance.bgImage = null; saveSettings(); applyLook(); rerenderSettings(); },
+  'ap-reset-colors': () => { S.settings.appearance.colors = {}; saveSettings(); applyLook(); rerenderSettings(); },
   'ap-save': () => {
     const name = prompt('Name for this theme', 'My theme');
     if (!name) return;
@@ -2316,15 +2363,16 @@ const actions = {
     const t = { id: db.uid(), name: name.trim().slice(0, 40), colors: paletteOf(a) };
     a.saved = [...(a.saved || []), t];
     a.theme = t.id; a.colors = {};
-    saveSettings(); applyAppearance(a); rerenderSettings();
+    saveSettings(); applyLook(); rerenderSettings();
   },
   'ap-delete': () => {
     const a = S.settings.appearance;
     const t = (a.saved || []).find((x) => x.id === a.theme);
     if (!t || !confirm(`Delete theme "${t.name}"?`)) return;
     a.saved = a.saved.filter((x) => x.id !== t.id);
+    if (t.hasCss) db.del('kv', `themecss:${t.id}`).catch(() => {});
     a.theme = 'midnight';
-    saveSettings(); applyAppearance(a); rerenderSettings();
+    saveSettings(); applyLook(); rerenderSettings();
   },
   'ap-export': async () => {
     const a = S.settings.appearance;
@@ -2718,7 +2766,7 @@ const actions = {
     await db.clear('characters'); await db.clear('chats'); await db.clear('kv');
     S.presets = []; S.lorebooks = []; S.regex = []; S.groups = []; S.qr = [];
     S.settings = defaultSettings();
-    applyAppearance(S.settings.appearance);
+    applyLook();
     await saveSettings(true);
     go('#/');
   },
@@ -2788,16 +2836,16 @@ document.addEventListener('input', (e) => {
     const a = S.settings.appearance;
     a.colors = { ...(a.colors || {}) };
     if (el.value.trim()) a.colors[el.dataset.apColor] = el.value.trim(); else delete a.colors[el.dataset.apColor];
-    applyAppearance(a);
+    applyLook();
     const sw = el.parentElement.querySelector('.swatch');
     if (sw) sw.style.background = paletteOf(a)[el.dataset.apColor];
     saveSettings();
   } else if (el.dataset.apNum) {
     const v = numOrNull(el.value);
-    if (v !== null) { S.settings.appearance[el.dataset.apNum] = v; applyAppearance(S.settings.appearance); saveSettings(); }
+    if (v !== null) { S.settings.appearance[el.dataset.apNum] = v; applyLook(); saveSettings(); }
   } else if ('apCss' in el.dataset) {
     S.settings.appearance.customCss = el.value;
-    applyAppearance(S.settings.appearance);
+    applyLook();
     saveSettings();
   } else if (el.dataset.extSum) {
     const k = el.dataset.extSum;
@@ -2852,11 +2900,17 @@ document.addEventListener('change', (e) => {
     rerenderSettings();
     return;
   }
+  if (el.dataset.apToggle) {
+    S.settings.appearance[el.dataset.apToggle] = el.checked;
+    saveSettings();
+    applyLook();
+    return;
+  }
   if (el.dataset.apSelect) {
     const a = S.settings.appearance;
     a[el.dataset.apSelect] = el.value;
     if (el.dataset.apSelect === 'theme') a.colors = {};
-    applyAppearance(a);
+    applyLook();
     saveSettings();
     rerenderSettings();
     return;
@@ -2997,7 +3051,7 @@ async function boot() {
   } : def;
   if (!S.settings.personas || !S.settings.personas.length) { S.settings.personas = def.personas; S.settings.activePersona = def.activePersona; }
   if (!settings) await saveSettings(true);
-  applyAppearance(S.settings.appearance);
+  await applyLook();
   for (const key of ['presets', 'lorebooks', 'regex', 'groups', 'qr']) {
     try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
   }

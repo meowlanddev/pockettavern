@@ -17,7 +17,7 @@ function inline(text) {
       .replace(/(^|[^*\w\\])\*([^*\n]+)\*(?![\w*])/g, '$1<em>$2</em>')
       .replace(/(^|[^\w\\])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
       .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
-      .replace(/("[^"\n]*"|“[^”\n]*”)/g, '<span class="q">$1</span>');
+      .replace(/("[^"\n]*"|“[^”\n]*”)/g, '<q class="q">$1</q>');
   }).join('');
 }
 
@@ -88,6 +88,9 @@ const MESSAGE_CSS = `
 :host { display: block; contain: layout; overflow-wrap: anywhere; overflow-x: auto; }
 em { color: var(--em); }
 .q { color: var(--quote); }
+q { quotes: none; }
+q::before, q::after { content: none; }
+u { color: var(--underline); }
 code { background: #0003; padding: 1px 5px; border-radius: 6px; font-size: .9em; }
 pre { background: #0004; padding: 8px 10px; border-radius: 10px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; }
 pre code { background: none; padding: 0; }
@@ -106,8 +109,27 @@ a { color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 `;
 
+// Extra rules from an imported SillyTavern theme, rewritten to work inside message shadow roots.
+let themeShadowCss = '';
+let shared = null; // one stylesheet shared by every message (adoptedStyleSheets), when supported
+const canAdopt = typeof CSSStyleSheet !== 'undefined' && 'replaceSync' in CSSStyleSheet.prototype && 'adoptedStyleSheets' in Document.prototype;
+export function setThemeShadowCss(css) {
+  themeShadowCss = css || '';
+  if (canAdopt) {
+    try { shared = shared || new CSSStyleSheet(); shared.replaceSync(MESSAGE_CSS + themeShadowCss); } catch { shared = null; }
+  }
+}
+
 /** Render sanitized HTML into a host element's shadow root. */
 export function renderInto(host, html) {
   const root = host.shadowRoot || host.attachShadow({ mode: 'open' });
-  root.innerHTML = `<style>${MESSAGE_CSS}</style>${html}`;
+  if (canAdopt) {
+    if (!shared) setThemeShadowCss(themeShadowCss);
+    if (shared) {
+      if (root.adoptedStyleSheets[0] !== shared) root.adoptedStyleSheets = [shared];
+      root.innerHTML = html;
+      return;
+    }
+  }
+  root.innerHTML = `<style>${MESSAGE_CSS}${themeShadowCss}</style>${html}`;
 }
