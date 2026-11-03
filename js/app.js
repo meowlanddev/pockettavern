@@ -1776,6 +1776,9 @@ document.addEventListener('change', (e) => {
     rerenderSettings();
   } else if (c === 'select-preset') {
     S.settings.activePreset = el.value || null;
+    // Like SillyTavern: picking a preset also loads its generation settings.
+    const picked = activePreset();
+    if (picked) applyPresetSamplers(picked);
     saveSettings();
     rerenderSettings();
   } else if (c === 'select-persona') {
