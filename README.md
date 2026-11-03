@@ -38,6 +38,8 @@ requests go straight from your phone to the AI provider.
   lorebooks + World Info settings, presets (active one selected), global regex, quick replies, active UI theme, global variables
 - Character's Note (depth prompt), `<think>` auto-parsing, custom stopping strings, hide/unhide messages (`/hide`, `/unhide`),
   per-message token counts, delete single swipes, lorebook budget and recursion limits, persona locks
+- **Library**: favorites, tag filters, tags-as-folders (imported from ST), sorting, tag manager,
+  **search inside chats** (all chats or one chat, jumps to the message), **import from chub.ai links** or direct card URLs
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 
 - **Sync between devices** via a sync file (iCloud Drive / AirDrop): newest copy of each record wins, nothing is deleted

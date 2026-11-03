@@ -489,3 +489,28 @@ body:not(.chat-bubble) .mes.user .ch_name { text-align: left; }
 hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .btn-col { display: flex; flex-direction: column; gap: 8px; }
 .btn-col .btn.block { margin-top: 0; }
+
+/* ---------- library ---------- */
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 6px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 6px 11px; border-radius: 14px; background: var(--bg2); border: 1px solid var(--line); font-size: .82rem; white-space: nowrap; }
+.chip.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.chip.on .muted { color: inherit; opacity: .7; }
+.chip.sel select { background: transparent; border: 0; color: inherit; font-size: .82rem; outline: none; padding: 0; }
+.crumb { display: inline-flex; align-items: center; gap: 6px; padding: 6px 4px; margin-bottom: 6px; font-weight: 600; color: var(--accent); }
+.folder-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.folder-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; background: var(--bg2); border: 1px solid var(--line); text-align: left; width: 100%; }
+.folder-item svg { color: var(--accent); }
+.char-item { cursor: pointer; background: color-mix(in srgb, var(--bg2) 72%, transparent); margin-bottom: 4px; }
+.ci-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.ci-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; align-self: stretch; }
+.fav-btn { font-size: 1.15rem; line-height: 1; color: var(--muted); opacity: .35; padding: 2px 4px; }
+.fav-btn.on { opacity: 1; }
+.fav-btn.on { color: #f5c542; }
+.search-results { display: flex; flex-direction: column; gap: 6px; }
+.search-hit { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); width: 100%; }
+.sh-meta { font-size: .72rem; color: var(--muted); }
+.sh-text { font-size: .88rem; overflow-wrap: anywhere; }
+.sh-text mark { background: color-mix(in srgb, var(--accent) 45%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.mes.flash .bubble { animation: flash 2.4s ease; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }

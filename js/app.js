@@ -15,7 +15,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -39,6 +39,7 @@ function defaultSettings() {
     activePersona: pid,
     ui: { enterSends: false, fontSize: 16 },
     instruct: { template: 'chatml', saved: [] },
+    library: { sort: 'recent', favFirst: true, folders: [] },
     ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS }, ...structuredClone(X.DEFAULT_EXT) },
     appearance: structuredClone(DEFAULT_APPEARANCE),
   };
@@ -1030,6 +1031,7 @@ async function render() {
     else if (r.name === 'preset' && r.a) renderPresetView(r.a);
     else if (r.name === 'group' && r.a) await renderGroupEditor(r.a);
     else if (r.name === 'qr' && r.a) renderQrView(r.a);
+    else if (r.name === 'search') await renderSearchView(r.a);
     else if (r.name === 'lorebook' && r.a) renderLorebookView(r.a);
     else if (r.name === 'settings') renderSettingsView(r.a);
     else await renderHome();
@@ -1042,19 +1044,44 @@ async function render() {
 window.addEventListener('hashchange', render);
 
 // ---------- HOME ----------
+const lib = () => S.settings.library || (S.settings.library = { sort: 'recent', favFirst: true, folders: [] });
+const SORTS = { recent: 'Recent chats', name: 'Name A–Z', added: 'Newest added' };
+
 async function renderHome() {
-  const chars = (await db.getAll('characters')).sort((a, b) => (b.lastChatAt || b.updatedAt || 0) - (a.lastChatAt || a.updatedAt || 0));
+  const chars = await db.getAll('characters');
   const conn = activeConn();
-  const q = S.homeQuery || '';
+  const L = lib();
+  const q = (S.homeQuery || '').trim().toLowerCase();
   const byId = new Map(chars.map((c) => [c.id, c]));
   const groups = S.groups.map((g) => ({ ...g, isGroup: true, membersList: g.members.map((id) => byId.get(id)).filter(Boolean) }));
-  const list = [...chars, ...groups]
-    .filter((c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || (c.tags || []).some((t) => t.toLowerCase().includes(q.toLowerCase())))
-    .sort((a, b) => (b.lastChatAt || b.updatedAt || 0) - (a.lastChatAt || a.updatedAt || 0));
+  const all = [...chars, ...groups];
+  // tag counts (folders first)
+  const counts = new Map();
+  for (const c of all) for (const t of c.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+  const folders = (L.folders || []).filter((f) => counts.has(f));
+  const tagChips = [...counts.entries()].filter(([t]) => !folders.includes(t)).sort((a, b) => b[1] - a[1]).slice(0, 24);
+  const tagOn = S.libTag || null;
+  const inFolder = tagOn && folders.includes(tagOn);
+  let list = all.filter((c) => {
+    if (S.libFav && !c.fav) return false;
+    if (tagOn && !(c.tags || []).includes(tagOn)) return false;
+    if (q) {
+      const hay = `${c.name} ${(c.tags || []).join(' ')} ${c.creator || ''} ${c.isGroup ? c.membersList.map((m) => m.name).join(' ') : ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    // characters inside a folder are hidden from the main list (like ST's tag folders)
+    if (!tagOn && !q && !S.libFav && folders.some((f) => (c.tags || []).includes(f))) return false;
+    return true;
+  });
+  const recent = (c) => c.lastChatAt || c.updatedAt || c.createdAt || 0;
+  const cmp = { recent: (a, b) => recent(b) - recent(a), name: (a, b) => a.name.localeCompare(b.name), added: (a, b) => (b.createdAt || 0) - (a.createdAt || 0) }[L.sort] || ((a, b) => recent(b) - recent(a));
+  list = list.sort((a, b) => (L.favFirst ? (b.fav ? 1 : 0) - (a.fav ? 1 : 0) : 0) || cmp(a, b));
+  const showFolders = !tagOn && !q && !S.libFav && folders.length;
   app.innerHTML = `
     <header class="bar">
       <h1 class="title">PocketTavern</h1>
       <div class="spacer"></div>
+      <button class="icon-btn" data-action="go" data-to="#/search" aria-label="Search chats">${ICONS.search}</button>
       <button class="icon-btn" data-action="import-files" aria-label="Import character">${ICONS.import}</button>
       <button class="icon-btn" data-action="new-menu" aria-label="New character or group">${ICONS.plus}</button>
       <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Settings">${ICONS.gear}</button>
@@ -1062,28 +1089,198 @@ async function renderHome() {
     <main class="scroll pad">
       ${isIOS && !isStandalone ? `<div class="banner">Install: tap <b>Share</b> ${ICONS.share} then <b>Add to Home Screen</b> for the full-screen app.</div>` : ''}
       ${!connReady(conn) ? `<button class="banner warn" data-action="go" data-to="#/settings/connection">No API connection yet — tap to set up OpenRouter, Claude or another API.</button>` : ''}
-      ${chars.length ? `<input class="search" type="search" placeholder="Search characters" value="${esc(q)}" data-input="home-search">` : ''}
+      ${all.length ? `
+        <input class="search" type="search" placeholder="Search characters, tags, creators" value="${esc(S.homeQuery || '')}" data-input="home-search">
+        <div class="chips">
+          <button class="chip ${S.libFav ? 'on' : ''}" data-action="lib-fav">★ Favorites</button>
+          <label class="chip sel">${ICONS.sort}<select data-change="lib-sort">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${L.sort === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+          ${tagChips.map(([t, n]) => `<button class="chip ${tagOn === t ? 'on' : ''}" data-action="lib-tag" data-tag="${esc(t)}">${esc(t)} <span class="muted">${n}</span></button>`).join('')}
+          ${counts.size ? `<button class="chip" data-action="tags-manage">${ICONS.edit} Tags</button>` : ''}
+        </div>
+        ${inFolder ? `<button class="crumb" data-action="lib-tag" data-tag="${esc(tagOn)}">${ICONS.back} ${ICONS.folder} ${esc(tagOn)}</button>` : ''}
+        ${showFolders ? `<div class="folder-list">${folders.map((f) => `<button class="folder-item" data-action="lib-tag" data-tag="${esc(f)}">${ICONS.folder}<span class="grow">${esc(f)}</span><span class="muted">${counts.get(f)}</span></button>`).join('')}</div>` : ''}` : ''}
       <div class="char-list">
         ${list.map((c) => `
-          <button class="char-item" data-action="go" data-to="#/chat/${c.id}">
+          <div class="char-item" role="button" tabindex="0" data-action="go" data-to="#/chat/${c.id}">
             ${c.isGroup ? groupAvatarHtml(c.membersList, 'lg') : avatarHtml(c.avatar, c.name, 'av lg')}
             <div class="ci-text">
               <div class="ci-name">${esc(c.name)}${c.isGroup ? ' <span class="badge">group</span>' : ''}</div>
               <div class="ci-desc">${esc(c.isGroup ? c.membersList.map((m) => m.name).join(', ') : macros(c.creator_notes || c.description, { char: c.name, user: activePersona().name }).replace(/\s+/g, ' ').slice(0, 140))}</div>
+              ${(c.tags || []).length ? `<div class="ci-tags">${c.tags.slice(0, 4).map((t) => `<span class="badge">${esc(t)}</span>`).join('')}</div>` : ''}
             </div>
-            <div class="ci-time">${timeAgo(c.lastChatAt)}</div>
-          </button>`).join('')}
+            <div class="ci-side">
+              <button class="fav-btn ${c.fav ? 'on' : ''}" data-action="fav-toggle" data-id="${c.id}" data-group="${c.isGroup ? 1 : ''}" aria-label="${c.fav ? 'Unfavorite' : 'Favorite'}">★</button>
+              <div class="ci-time">${timeAgo(c.lastChatAt)}</div>
+            </div>
+          </div>`).join('')}
+        ${all.length && !list.length ? '<p class="muted center">Nothing matches.</p>' : ''}
       </div>
-      ${!chars.length ? `
+      ${!all.length ? `
         <div class="empty">
           <p>No characters yet.</p>
-          <p class="muted">Import SillyTavern / TavernAI cards (PNG or JSON), e.g. ones you downloaded from chub.ai, or create your own.</p>
+          <p class="muted">Import SillyTavern / TavernAI cards (PNG or JSON), paste a chub.ai link, or create your own.</p>
           <div class="row center">
             <button class="btn primary" data-action="import-files">Import card</button>
+            <button class="btn" data-action="link-import">From a link</button>
             <button class="btn" data-action="go" data-to="#/edit/new">Create character</button>
           </div>
         </div>` : ''}
     </main>`;
+}
+
+function tagsSheet() {
+  db.getAll('characters').then((chars) => {
+    const counts = new Map();
+    for (const c of [...chars, ...S.groups]) for (const t of c.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+    const folders = lib().folders || [];
+    openSheet(`<div class="sheet-title">Tags</div>
+      <p class="hint">Turn a tag into a folder to tuck its characters away from the main list (like SillyTavern's tag folders). Edit a character's tags in Edit character.</p>
+      ${[...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([t, n]) => `<div class="list-row">
+        <span class="grow">${esc(t)} <span class="muted small">${n}</span></span>
+        <span class="hint">Folder</span><label class="toggle mini"><input type="checkbox" data-folder-tag="${esc(t)}" ${folders.includes(t) ? 'checked' : ''}><i></i></label>
+        <button class="icon-btn sm" data-action="tag-rename" data-tag="${esc(t)}" aria-label="Rename">${ICONS.edit}</button>
+        <button class="icon-btn sm danger" data-action="tag-delete" data-tag="${esc(t)}" aria-label="Delete">${ICONS.trash}</button>
+      </div>`).join('') || '<p class="muted">No tags yet.</p>'}`, 'tall');
+  });
+}
+
+async function retag(from, to) {
+  for (const c of await db.getAll('characters')) {
+    if (!(c.tags || []).includes(from)) continue;
+    c.tags = [...new Set(c.tags.map((t) => (t === from ? to : t)).filter(Boolean))];
+    await db.put('characters', c);
+  }
+  let g = false;
+  for (const x of S.groups) if ((x.tags || []).includes(from)) { x.tags = [...new Set(x.tags.map((t) => (t === from ? to : t)).filter(Boolean))]; g = true; }
+  if (g) saveGroups();
+  const L = lib();
+  L.folders = (L.folders || []).map((f) => (f === from ? to : f)).filter(Boolean);
+  if (S.libTag === from) S.libTag = to || null;
+  saveSettings();
+}
+
+// ---------- search inside chats ----------
+async function renderSearchView(chatId) {
+  const scoped = chatId ? await db.get('chats', chatId) : null;
+  app.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn" data-action="go-back" aria-label="Back">${ICONS.back}</button>
+      <h1 class="title">${scoped ? `Search “${esc(scoped.title)}”` : 'Search all chats'}</h1>
+    </header>
+    <main class="scroll pad">
+      <input class="search" type="search" id="chat-search" placeholder="Words to find…" value="${esc(S.searchQuery || '')}" autocomplete="off">
+      <div id="search-results" class="search-results"></div>
+    </main>`;
+  const input = $('#chat-search');
+  let timer;
+  const run = () => { clearTimeout(timer); timer = setTimeout(() => searchChats(input.value, chatId), 250); };
+  input.addEventListener('input', () => { S.searchQuery = input.value; run(); });
+  if (S.searchQuery) run();
+  setTimeout(() => input.focus(), 50);
+}
+
+async function searchChats(query, chatId) {
+  const box = $('#search-results');
+  if (!box) return;
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) { box.innerHTML = '<p class="muted">Type at least two letters.</p>'; return; }
+  const chats = chatId ? [await db.get('chats', chatId)].filter(Boolean) : await db.getAll('chats');
+  const chars = new Map((await db.getAll('characters')).map((c) => [c.id, c]));
+  const groups = new Map(S.groups.map((g) => [g.id, g]));
+  const hits = [];
+  for (const chat of chats) {
+    const owner = chars.get(chat.charId) || groups.get(chat.charId);
+    if (!owner) continue;
+    chat.messages.forEach((m, i) => {
+      const text = m.swipes[m.swipeIdx] || '';
+      const at = text.toLowerCase().indexOf(q);
+      if (at < 0) return;
+      const from = Math.max(0, at - 70);
+      hits.push({ chat, owner, m, i, ts: m.ts || chat.updatedAt, pre: (from ? '…' : '') + text.slice(from, at), hit: text.slice(at, at + q.length), post: text.slice(at + q.length, at + q.length + 90) + '…' });
+    });
+  }
+  hits.sort((a, b) => b.ts - a.ts);
+  const who = (h) => (h.m.role === 'user' ? (activePersona().name || 'You') : h.m.name || h.owner.name);
+  box.innerHTML = `<p class="muted small">${hits.length ? `${hits.length} match${hits.length === 1 ? '' : 'es'}${hits.length > 200 ? ' (showing 200)' : ''}` : 'No matches.'}</p>`
+    + hits.slice(0, 200).map((h) => `<button class="search-hit" data-action="search-open" data-char="${h.owner.id}" data-chat="${h.chat.id}" data-msg="${h.m.id}">
+        <span class="sh-meta">${esc(h.owner.name)} · ${esc(h.chat.title)} · ${esc(who(h))} · ${timeAgo(h.ts)}</span>
+        <span class="sh-text">${esc(h.pre)}<mark>${esc(h.hit)}</mark>${esc(h.post)}</span>
+      </button>`).join('');
+}
+
+// ---------- import from a link (chub.ai, or a direct card URL) ----------
+function chubPath(input) {
+  const t = String(input || '').trim();
+  const m = t.match(/(?:chub\.ai|characterhub\.org)\/(?:characters\/)?([^/?#\s]+)\/([^/?#\s]+)/i);
+  if (m) return `${m[1]}/${m[2]}`;
+  if (/^[\w.-]+\/[\w.-]+$/.test(t)) return t;
+  return null;
+}
+
+async function cardFromChub(path) {
+  const errors = [];
+  // 1) the card PNG chub serves for every character (identical to "Download → PNG")
+  try {
+    const r = await fetch(`https://avatars.charhub.io/avatars/${path}/chara_card_v2.png`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    return parseCardFile(new File([blob], `${path.split('/')[1]}.png`, { type: 'image/png' }));
+  } catch (e) { errors.push(`card image: ${e.message}`); }
+  // 2) the public API (JSON definition + avatar)
+  try {
+    const r = await fetch(`https://api.chub.ai/api/characters/${path}?full=true`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const node = (await r.json()).node;
+    if (!node || !node.definition) throw new Error('no character data');
+    const d = node.definition;
+    const card = normalizeCard({
+      spec: 'chara_card_v2',
+      data: {
+        name: d.name || node.name, description: d.personality || '', personality: d.tavern_personality || '', scenario: d.scenario || '',
+        first_mes: d.first_message || '', mes_example: d.example_dialogs || '', system_prompt: d.system_prompt || '',
+        post_history_instructions: d.post_history_instructions || '', alternate_greetings: d.alternate_greetings || [],
+        creator_notes: d.description || node.tagline || '', character_book: d.embedded_lorebook || undefined,
+        tags: (node.topics || []).filter((x) => x !== 'ROOT'), creator: path.split('/')[0], extensions: d.extensions || {},
+      },
+    });
+    let avatarBlob = null;
+    const av = node.max_res_url || node.avatar_url;
+    if (av) { try { const a = await fetch(av); if (a.ok) avatarBlob = await a.blob(); } catch { /* no avatar */ } }
+    return { card, avatarBlob };
+  } catch (e) { errors.push(`API: ${e.message}`); }
+  const blocked = errors.some((x) => /Failed to fetch|Load failed|NetworkError/i.test(x));
+  throw new Error(blocked
+    ? "chub.ai didn't allow the download from inside the app. Open the character on chub.ai → Download → PNG, then import that file."
+    : `Couldn't get that character from chub.ai (${errors.join('; ')}).`);
+}
+
+async function importFromLink(link) {
+  const t = String(link || '').trim();
+  let res;
+  let base;
+  const path = chubPath(t);
+  if (path) {
+    toast('Downloading from chub.ai…', 20000);
+    res = await cardFromChub(path);
+    base = path.split('/')[1];
+  } else if (/^https:\/\//i.test(t)) {
+    toast('Downloading…', 20000);
+    let r;
+    try { r = await fetch(t); } catch { throw new Error("That site didn't allow the download from inside the app. Download the card file and import it instead."); }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    base = decodeURIComponent(t.split(/[?#]/)[0].split('/').pop() || 'card').replace(/\.[^.]+$/, '');
+    res = await parseCardFile(new File([blob], `${base}.${/png/.test(blob.type) ? 'png' : 'json'}`, { type: blob.type }));
+  } else {
+    throw new Error('Paste a chub.ai character link (or creator/name), or a direct https link to a card PNG/JSON.');
+  }
+  const now = Date.now();
+  const c = { id: db.uid(), ...res.card, fileName: base, avatar: res.avatarBlob ? await blobToAvatar(res.avatarBlob) : null, createdAt: now, updatedAt: now, source: t };
+  if (res.card.extensions && res.card.extensions.fav) c.fav = true;
+  await db.put('characters', c);
+  toast(`Imported ${c.name}`);
+  closeSheet();
+  go(`#/chat/${c.id}`);
 }
 
 const looksRegex = (j) => (Array.isArray(j) ? j.length && j.every((x) => x && typeof x.findRegex === 'string')
@@ -1169,6 +1366,7 @@ async function importFiles() {
       }
       const now = Date.now();
       const c = { id: db.uid(), ...card, fileName: base, avatar: avatarBlob ? await blobToAvatar(avatarBlob) : null, createdAt: now, updatedAt: now };
+      if (card.extensions && (card.extensions.fav === true || card.extensions.fav === 'true')) c.fav = true;
       await db.put('characters', c);
       lastChar = c;
       done.chars++;
@@ -1274,6 +1472,12 @@ async function importStZip(file) {
     const existing = await db.getAll('characters');
     const charByFile = new Map(existing.filter((c) => c.fileName).map((c) => [c.fileName.toLowerCase(), c]));
     const charLore = new Map((wiCfg.charLore || []).map((x) => [lower(x.name), x.extraBooks || []]));
+    // ST tags: settings.tags [{id, name, folder_type}] + tag_map { "Card.png": [ids] }
+    const tagName = new Map((Array.isArray(st.tags) ? st.tags : []).map((t) => [t.id, t.name]));
+    const tagMap = st.tag_map && typeof st.tag_map === 'object' ? st.tag_map : {};
+    const stTagsFor = (file) => (tagMap[file] || tagMap[`${file}.png`] || []).map((id) => tagName.get(id)).filter(Boolean);
+    const stFolders = (Array.isArray(st.tags) ? st.tags : []).filter((t) => t.folder_type && t.folder_type !== 'NONE').map((t) => t.name);
+    if (stFolders.length) { const L = lib(); L.folders = [...new Set([...(L.folders || []), ...stFolders])]; }
     const cards = z.characters.filter((e) => !e.rel.includes('/') && /\.(png|json)$/i.test(e.rel));
     for (let i = 0; i < cards.length; i++) {
       const e = cards[i];
@@ -1288,6 +1492,9 @@ async function importStZip(file) {
         const c = { id: db.uid(), ...card, fileName: base, avatar: avatarBlob ? await blobToAvatar(avatarBlob) : null, createdAt: now, updatedAt: now };
         const extra = (charLore.get(base.toLowerCase()) || []).map((n) => bookByName.get(String(n).toLowerCase())).filter(Boolean).map((b) => b.id);
         if (extra.length) c.lorebooks = extra;
+        const stTags = stTagsFor(e.rel);
+        if (stTags.length) c.tags = [...new Set([...(c.tags || []), ...stTags])];
+        if (card.extensions && (card.extensions.fav === true || card.extensions.fav === 'true')) c.fav = true;
         await db.put('characters', c);
         charByFile.set(base.toLowerCase(), c);
         done.chars++;
@@ -1357,6 +1564,7 @@ async function importStZip(file) {
           muted: (g.disabled_members || []).map((m) => charByFile.get(lower(m))).filter(Boolean).map((m) => m.id),
           strategy: ['natural', 'list', 'manual'][Number(g.activation_strategy) || 0] || 'natural',
           mode: Number(g.generation_mode) >= 1 ? 'join' : 'swap', scenario: '', createdAt: now, updatedAt: now,
+          fav: !!g.fav, tags: (tagMap[g.id] || []).map((id) => tagName.get(id)).filter(Boolean),
         };
         S.groups.push(group);
         done.groups++;
@@ -1697,6 +1905,11 @@ async function renderChatView(charId, chatId) {
   updateSendButton();
   renderAttachRow();
   updateExpressionPanel();
+  if (S.jumpTo && S.jumpTo.chatId === S.chat.id) {
+    const el = $(`#chat .mes[data-id="${S.jumpTo.msgId}"]`);
+    S.jumpTo = null;
+    if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2400); }
+  }
 }
 
 function renderAttachRow() {
@@ -2093,6 +2306,7 @@ function chatMenu() {
       <button data-action="new-chat">${ICONS.plus}<span>New chat</span></button>
       <button data-action="go" data-to="#/${S.group ? 'group' : 'edit'}/${S.char.id}">${ICONS.edit}<span>Edit ${S.group ? 'group' : 'character'}</span></button>
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
+      <button data-action="go" data-to="#/search/${S.chat.id}">${ICONS.search}<span>Search this chat</span></button>
       ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
       ${S.group ? '' : `<button data-action="persona-lock">${ICONS.user}<span>${S.char.personaId === S.settings.activePersona ? `Unlock persona` : `Lock persona “${esc(activePersona().name)}”`}</span></button>`}
       <button data-action="export-chat">${ICONS.download}<span>Export chat</span></button>
@@ -3269,6 +3483,38 @@ const actions = {
   },
   'msg-regen': (el) => { if (!S.generating) { const m = findMsg(el.dataset.id); runGeneration('swipe', m && m.charId); } },
   'quick-actions': quickActions,
+  'lib-fav': () => { S.libFav = !S.libFav; renderHome(); },
+  'lib-tag': (el) => { S.libTag = S.libTag === el.dataset.tag ? null : el.dataset.tag; renderHome(); },
+  'fav-toggle': async (el) => {
+    if (el.dataset.group) {
+      const g = S.groups.find((x) => x.id === el.dataset.id);
+      if (g) { g.fav = !g.fav; saveGroups(); }
+    } else {
+      const c = await db.get('characters', el.dataset.id);
+      if (c) { c.fav = !c.fav; await db.put('characters', c); }
+    }
+    renderHome();
+  },
+  'tags-manage': tagsSheet,
+  'tag-rename': async (el) => {
+    const to = prompt('Rename tag', el.dataset.tag);
+    if (to === null || !to.trim() || to.trim() === el.dataset.tag) return;
+    await retag(el.dataset.tag, to.trim());
+    tagsSheet(); renderHome();
+  },
+  'tag-delete': async (el) => {
+    if (!confirm(`Remove the tag "${el.dataset.tag}" from every character?`)) return;
+    await retag(el.dataset.tag, '');
+    tagsSheet(); renderHome();
+  },
+  'search-open': (el) => { S.jumpTo = { chatId: el.dataset.chat, msgId: el.dataset.msg }; go(`#/chat/${el.dataset.char}/${el.dataset.chat}`); },
+  'link-import': () => openSheet(`<div class="sheet-title">Import from a link</div>
+    <label class="field"><span class="label">chub.ai character link</span><input id="link-url" placeholder="https://chub.ai/characters/creator/name" autocapitalize="off" spellcheck="false"></label>
+    <p class="hint">Also works with “creator/name”, or a direct https link to a card PNG/JSON.</p>
+    <button class="btn primary block" data-action="link-go">Import</button>`),
+  'link-go': async () => {
+    try { await importFromLink(($('#link-url') || {}).value); } catch (e) { toast(e.message, 8000); }
+  },
   'st-button': (el) => { const r = S.buttonResolve; S.buttonResolve = null; closeSheet(); if (r) r(+el.dataset.i); },
   'ins-copy': () => {
     const ins = S.settings.instruct;
@@ -3479,6 +3725,8 @@ const actions = {
     <div class="menu-grid two">
       <button data-action="go" data-to="#/edit/new">${ICONS.user}<span>New character</span></button>
       <button data-action="go" data-to="#/group/new">${ICONS.users}<span>New group chat</span></button>
+      <button data-action="link-import">${ICONS.link}<span>Import from chub.ai / link</span></button>
+      <button data-action="import-files">${ICONS.import}<span>Import files</span></button>
     </div>`),
   'group-save': async () => {
     const g = collectGroupDraft();
@@ -3921,6 +4169,15 @@ document.addEventListener('change', (e) => {
     saveSettings();
     return;
   }
+  if (el.dataset.folderTag) {
+    const L = lib();
+    const set = new Set(L.folders || []);
+    if (el.checked) set.add(el.dataset.folderTag); else set.delete(el.dataset.folderTag);
+    L.folders = [...set];
+    saveSettings();
+    if (route().name === 'home') renderHome();
+    return;
+  }
   if (el.dataset.insSelect) {
     const t = (S.settings.instruct.saved || []).find((x) => x.id === S.settings.instruct.template);
     if (t) { t[el.dataset.insSelect] = el.value; saveSettings(); }
@@ -4024,6 +4281,10 @@ document.addEventListener('change', (e) => {
     conn.model = '';
     saveSettings();
     rerenderSettings();
+  } else if (c === 'lib-sort') {
+    lib().sort = el.value;
+    saveSettings();
+    renderHome();
   } else if (c === 'instruct-template') {
     S.settings.instruct.template = el.value;
     saveSettings();
@@ -4077,6 +4338,10 @@ const ICONS = {
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
   users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3.2-5.5 7-5.5s7 2 7 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2.3.7 4 2.4 4 5.2"/>'),
   note: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'),
+  folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>', 'width="18" height="18"'),
+  sort: svg('<path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/>', 'width="16" height="16"'),
+  link: svg('<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>'),
   image: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/>'),
   speaker: svg('<path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>', 'width="18" height="18"'),
   globe: svg('<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>', 'width="18" height="18"'),
