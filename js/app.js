@@ -139,6 +139,15 @@ function scriptsFor(char) {
     }
     list.push(...cardScriptCache.get(raw));
   }
+  // Regex scripts bundled inside the active ST preset (extensions.regex_scripts).
+  const pr = activePreset();
+  const praw = pr && pr.raw && pr.raw.extensions && pr.raw.extensions.regex_scripts;
+  if (pr && pr.runPresetRegex !== false && Array.isArray(praw) && praw.length) {
+    if (!cardScriptCache.has(praw)) {
+      cardScriptCache.set(praw, praw.map((x) => { try { return normalizeScript(x); } catch { return null; } }).filter(Boolean));
+    }
+    list.push(...cardScriptCache.get(praw));
+  }
   return list;
 }
 
@@ -3056,6 +3065,7 @@ function renderPresetView(id) {
     <main class="scroll pad">
       ${S.settings.activePreset !== id ? `<button class="banner warn" data-action="preset-activate" data-id="${id}">This preset isn't active. Tap to use it.</button>` : ''}
       <p class="hint">Switch prompts on and off like SillyTavern's prompt manager. Tap a name to read or edit it.</p>
+      ${(() => { const n = (p.raw?.extensions?.regex_scripts || []).length; return n ? `<label class="toggle"><span><span class="label">Run this preset's ${n} regex script${n === 1 ? '' : 's'}</span><span class="hint">Bundled in the preset file, like SillyTavern's preset regex.</span></span><input type="checkbox" data-preset-rx="1" ${p.runPresetRegex === false ? '' : 'checked'}><i></i></label>` : ''; })()}
       <input class="search" type="search" placeholder="Search prompts" value="${esc(S.pmQuery || '')}" data-input="pm-search">
       <div class="pm-list">
         ${p.order.map((o, i) => {
@@ -4237,6 +4247,12 @@ document.addEventListener('change', (e) => {
   if (el.dataset.gMember) {
     const g = collectGroupDraft();
     renderGroupEditor(g.isNew ? 'new' : g.id);
+    return;
+  }
+  if (el.dataset.presetRx) {
+    const p = presetById(S.pmId);
+    p.runPresetRegex = el.checked;
+    savePresets();
     return;
   }
   if (el.dataset.pmToggle !== undefined) {
