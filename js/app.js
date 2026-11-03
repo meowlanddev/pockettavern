@@ -95,7 +95,8 @@ function saveSettings(now = false) {
   const doSave = () => {
     const job = saveQueue.then(async () => {
       S.settings.savedAt = Date.now();
-      const { settings, vault } = await V.sealSettings(S.settings);
+      const { settings, vault, unsaved } = await V.sealSettings(S.settings);
+      if (unsaved && !S.warnedNoVault) { S.warnedNoVault = true; toast('Secure storage isn\'t available here, so API keys only last until you close the app. Open PocketTavern from its https address to save them.', 8000); }
       await db.putMany('kv', vault ? [[settings, 'settings'], [vault, 'vault']] : [[settings, 'settings']]);
     });
     saveQueue = job.catch((e) => console.error('Saving settings failed', e));

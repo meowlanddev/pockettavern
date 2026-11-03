@@ -81,8 +81,10 @@ async function unseal(key, box) {
  */
 export async function sealSettings(settings) {
   const copy = structuredClone(settings);
-  if (!vaultAvailable) return { settings: copy, vault: null };
   const secrets = takeSecrets(copy);
+  // No Web Crypto (only happens off https): never store keys unencrypted.
+  // They stay in memory for this session and must be re-entered next time.
+  if (!vaultAvailable) return { settings: copy, vault: null, unsaved: Object.keys(secrets).length };
   return { settings: copy, vault: await seal(await getDeviceKey(), secrets) };
 }
 
