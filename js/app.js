@@ -1,20 +1,21 @@
 import * as db from './db.js';
 import { parseCardFile, blobToAvatar, exportCardPng, toV2, isPng, normalizeCard } from './card.js';
 import { buildPrompt, macros } from './prompt.js';
-import { PROVIDERS, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
+import { PROVIDERS, TEXT_SERVERS, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
+import { INSTRUCT_TEMPLATES, INSTRUCT_FIELDS, importInstruct, messagesToText } from './instruct.js';
 import * as X from './extras.js';
 import { evaluateMacros } from './macros.js';
 import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './worldinfo.js';
 import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
 import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
 import { formatMessage, renderInto, setThemeShadowCss } from './render.js';
-import { runScript } from './stscript.js';
+import { runScript, COMMANDS } from './stscript.js';
 import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
 import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -37,6 +38,7 @@ function defaultSettings() {
     personas: [{ id: pid, name: 'User', description: '', avatar: null }],
     activePersona: pid,
     ui: { enterSends: false, fontSize: 16 },
+    instruct: { template: 'chatml', saved: [] },
     ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS }, ...structuredClone(X.DEFAULT_EXT) },
     appearance: structuredClone(DEFAULT_APPEARANCE),
   };
@@ -84,7 +86,7 @@ $('#toast').addEventListener('click', () => $('#toast').classList.remove('show')
 let saveTimer;
 function saveSettings(now = false) {
   clearTimeout(saveTimer);
-  const doSave = () => db.put('kv', S.settings, 'settings');
+  const doSave = () => { S.settings.savedAt = Date.now(); return db.put('kv', S.settings, 'settings'); };
   if (now) return doSave();
   saveTimer = setTimeout(doSave, 400);
 }
@@ -458,7 +460,21 @@ function continuityFor(chat) {
 
 const unescapeStop = (s) => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
 
-/** Stopping strings and <think> parsing for a request. kind: reply | impersonate | quiet */
+const connReady = (conn) => !!conn && (!!conn.model || (PROVIDERS[conn.provider] || {}).kind === 'text');
+const isTextConn = (conn = activeConn()) => !!conn && (PROVIDERS[conn.provider] || {}).kind === 'text';
+function currentInstruct() {
+  const ins = S.settings.instruct;
+  return (ins.saved || []).find((t) => t.id === ins.template) || INSTRUCT_TEMPLATES[ins.template] || INSTRUCT_TEMPLATES.chatml;
+}
+/** For text-completion backends: turn chat messages into one prompt using the instruct template. */
+function textFormatter(kind, speaker) {
+  const mode = { reply: 'reply', continue: 'continue', impersonate: 'impersonate' }[kind] || 'quiet';
+  return (messages) => messagesToText(messages, currentInstruct(), {
+    char: (speaker || S.char || {}).name, user: activePersona().name || 'User', mode, group: !!S.group,
+  });
+}
+
+/** Stopping strings and <think> parsing for a request. kind: reply | continue | impersonate | quiet */
 function genOptions(kind, speaker) {
   const p = S.settings.preset;
   const user = activePersona().name || 'User';
@@ -475,7 +491,7 @@ function genOptions(kind, speaker) {
     }
   }
   const think = p.reasoning_parse !== false ? { prefix: p.reasoning_prefix || '<think>', suffix: p.reasoning_suffix || '</think>' } : null;
-  return { stop: [...new Set([...custom, ...names])], think };
+  return { stop: [...new Set([...custom, ...names])], think, textFormat: isTextConn() ? textFormatter(kind, speaker) : null };
 }
 
 const connFor = (model) => { const c = activeConn(); return c && model ? { ...c, model } : c; };
@@ -483,9 +499,9 @@ const memNameOf = (m) => (m.role === 'user' ? (activePersona().name || 'User') :
 
 async function memCall(system, user, maxTokens, model) {
   const conn = connFor(model);
-  if (!conn || !conn.model) throw new Error('No API connection.');
+  if (!connReady(conn)) throw new Error('No API connection.');
   const preset = { ...S.settings.preset, stream: false, max_tokens: maxTokens };
-  return generate(conn, preset, [{ role: 'system', content: system }, { role: 'user', content: user }]);
+  return generate(conn, preset, [{ role: 'system', content: system }, { role: 'user', content: user }], { textFormat: isTextConn(conn) ? textFormatter('quiet') : null });
 }
 
 /** Compress old chat into Layer 0 memories, then merge crowded layers. mode: auto | force | slop */
@@ -608,7 +624,7 @@ function summaryFor(chat) {
 /** Background generation with the full chat context (SillyTavern's generateQuietPrompt). */
 async function quietGenerate(quietPrompt, { onToken, maxTokens, signal, chat = S.chat } = {}) {
   const conn = activeConn();
-  if (!conn || !conn.model) throw new Error('Set up an API connection first (Settings → Connection).');
+  if (!connReady(conn)) throw new Error('Set up an API connection first (Settings → Connection).');
   let speaker = S.char;
   if (S.group && chat.groupId === S.group.id) {
     const lastChar = [...chat.messages].reverse().find((m) => m.role === 'assistant');
@@ -749,7 +765,7 @@ function scriptApi(chat) {
     gen: async (prompt) => normalizeGeneratedText(await quietGenerate(prompt, { chat })),
     genraw: async (prompt) => {
       const conn = activeConn();
-      if (!conn || !conn.model) throw new Error('Set up an API connection first.');
+      if (!connReady(conn)) throw new Error('Set up an API connection first.');
       return normalizeGeneratedText(await generate(conn, { ...S.settings.preset, stream: false }, [{ role: 'user', content: prompt }]));
     },
     impersonate: () => runImpersonate(),
@@ -765,6 +781,41 @@ function scriptApi(chat) {
       S.settings.activePreset = p ? p.id : null;
       if (p) applyPresetSamplers(p);
       saveSettings();
+    },
+    buttons: (text, labels) => new Promise((resolve) => {
+      openSheet(`<div class="sheet-title">${esc(text || 'Choose')}</div><div class="btn-col">${labels.map((l, i) => `<button class="btn block" data-action="st-button" data-i="${i}">${esc(l)}</button>`).join('')}</div>`);
+      S.buttonResolve = (i) => { S.buttonResolve = null; resolve(i == null ? '' : labels[i]); };
+    }),
+    runQr: async (label) => {
+      const want = String(label || '').trim().toLowerCase();
+      const b = S.qr.flatMap((set) => set.buttons).find((x) => (x.label || '').trim().toLowerCase() === want);
+      if (!b) throw new Error(`No quick reply called "${label}"`);
+      const text = (b.message || '').trim();
+      if (text.startsWith('/')) return runScript(text, scriptApi(chat));
+      await push({ role: 'user', swipes: [scriptApi(chat).macro(text)] });
+      return text;
+    },
+    messages: (range, names) => {
+      const list = chat.messages;
+      let a = list.length - 1;
+      let b = a;
+      const m = String(range).match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+      if (m) { a = +m[1]; b = m[2] !== undefined ? +m[2] : a; }
+      return list.slice(Math.max(0, Math.min(a, b)), Math.max(a, b) + 1)
+        .map((x) => `${names ? `${memNameOf(x)}: ` : ''}${x.swipes[x.swipeIdx] || ''}`).join('\n\n');
+    },
+    del: async (n) => {
+      chat.messages.splice(Math.max(0, chat.messages.length - n), n);
+      await saveChat(chat);
+      if (S.chat === chat) renderMessages();
+    },
+    addSwipe: async (text) => {
+      const m = [...chat.messages].reverse().find((x) => x.role === 'assistant');
+      if (!m) throw new Error('No character message to add a swipe to.');
+      m.swipes.push(text);
+      m.swipeIdx = m.swipes.length - 1;
+      await saveChat(chat);
+      if (S.chat === chat) renderMessages();
     },
     custom: {
       imagine: (arg) => runImageGen(...imagineArgs(arg)),
@@ -939,6 +990,7 @@ function openSheet(html, cls = '') {
   return wrap.querySelector('.sheet-body');
 }
 function closeSheet() {
+  if (S.buttonResolve) S.buttonResolve(null);
   document.querySelectorAll('.sheet-wrap').forEach((w) => w.remove());
 }
 
@@ -1009,7 +1061,7 @@ async function renderHome() {
     </header>
     <main class="scroll pad">
       ${isIOS && !isStandalone ? `<div class="banner">Install: tap <b>Share</b> ${ICONS.share} then <b>Add to Home Screen</b> for the full-screen app.</div>` : ''}
-      ${!conn || !conn.model ? `<button class="banner warn" data-action="go" data-to="#/settings/connection">No API connection yet — tap to set up OpenRouter, Claude or another API.</button>` : ''}
+      ${!connReady(conn) ? `<button class="banner warn" data-action="go" data-to="#/settings/connection">No API connection yet — tap to set up OpenRouter, Claude or another API.</button>` : ''}
       ${chars.length ? `<input class="search" type="search" placeholder="Search characters" value="${esc(q)}" data-input="home-search">` : ''}
       <div class="char-list">
         ${list.map((c) => `
@@ -1072,6 +1124,15 @@ async function importFiles() {
           done.regex += list.length;
           continue;
         }
+        const ins = importInstruct(json, base);
+        if (ins && !isSTPreset(json)) {
+          const t = { ...ins, id: db.uid() };
+          S.settings.instruct.saved = [...(S.settings.instruct.saved || []), t];
+          S.settings.instruct.template = t.id;
+          saveSettings();
+          done.instruct = (done.instruct || 0) + 1;
+          continue;
+        }
         const theme = importThemeFile(json, base);
         if (theme) {
           const a = S.settings.appearance;
@@ -1125,6 +1186,7 @@ async function importFiles() {
   if (done.books) parts.push(`${done.books} lorebook${done.books > 1 ? 's' : ''}`);
   if (done.regex) parts.push(`${done.regex} regex script${done.regex > 1 ? 's' : ''}`);
   if (done.qr) parts.push(`${done.qr} quick reply set${done.qr > 1 ? 's' : ''}`);
+  if (done.instruct) parts.push(`${done.instruct} instruct template${done.instruct > 1 ? 's' : ''} (selected)`);
   if (done.themes) parts.push(`${done.themes} theme${done.themes > 1 ? 's' : ''} (applied)`);
   if (!parts.length) return;
   if (lastPreset && confirm(`Use preset "${lastPreset.name}" now?\n\nThis also applies its generation settings (max tokens, context size, temperature…).`)) {
@@ -1413,6 +1475,18 @@ async function importStZip(file) {
       }
     }
 
+    // Instruct templates (for text-completion connections)
+    for (const e of (z.instruct || []).filter((x) => /\.json$/i.test(x.rel) && !x.rel.includes('/'))) {
+      try {
+        const t = importInstruct(await readJson(file, e), baseName(e.rel));
+        if (!t || (S.settings.instruct.saved || []).some((x) => x.name === t.name)) continue;
+        S.settings.instruct.saved = [...(S.settings.instruct.saved || []), { ...t, id: db.uid() }];
+        done.instruct = (done.instruct || 0) + 1;
+      } catch { /* skip */ }
+    }
+    const activeIns = pu.instruct && pu.instruct.preset && (S.settings.instruct.saved || []).find((x) => x.name === pu.instruct.preset);
+    if (activeIns) S.settings.instruct.template = activeIns.id;
+
     // Global variables
     if (ext.variables && ext.variables.global && typeof ext.variables.global === 'object') {
       S.settings.globalVars = { ...(S.settings.globalVars || {}), ...ext.variables.global };
@@ -1425,7 +1499,7 @@ async function importStZip(file) {
   const rows = [
     ['Characters', done.chars], ['Expression sprites', done.sprites], ['Chats', done.chats], ['Group chats', done.groups ? `${done.groups} groups, ${done.groupChats} chats` : 0],
     ['Personas', done.personas], ['Lorebooks', done.books], ['Presets', done.presets], ['Regex scripts', done.regex],
-    ['Quick reply sets', done.qr], ['Theme', done.themes], ['Already here (skipped)', done.skipped],
+    ['Quick reply sets', done.qr], ['Instruct templates', done.instruct], ['Theme', done.themes], ['Already here (skipped)', done.skipped],
   ].filter(([, v]) => v);
   prog(rows.length ? 'Done!' : 'Nothing was imported.');
   const box = $('#imp-result');
@@ -1828,7 +1902,7 @@ async function sendMessage() {
  */
 async function runGeneration(mode, speakerId) {
   const conn = activeConn();
-  if (!conn || !conn.model) {
+  if (!connReady(conn)) {
     toast('Set up an API connection first (Settings → Connection).', 4000);
     return;
   }
@@ -1877,7 +1951,7 @@ async function runGeneration(mode, speakerId) {
     let produced = '';
     const text = await generate(conn, S.settings.preset, messages, {
       signal: S.abort.signal,
-      ...genOptions('reply', speaker),
+      ...genOptions(mode === 'continue' ? 'continue' : 'reply', speaker),
       onToken: (t, r) => {
         produced = t;
         msg.swipes[idx] = original + postfix + (original ? t : t.replace(/^\s+/, ''));
@@ -1938,7 +2012,7 @@ function continuePostfix() {
 async function runImpersonate() {
   if (S.generating) return;
   const conn = activeConn();
-  if (!conn || !conn.model) { toast('Set up an API connection first (Settings → Connection).', 4000); return; }
+  if (!connReady(conn)) { toast('Set up an API connection first (Settings → Connection).', 4000); return; }
   const chat = S.chat;
   let speaker = S.char;
   if (S.group && chat.groupId === S.group.id) {
@@ -2384,7 +2458,11 @@ function renderSettingsView(open) {
         <select data-change="conn-provider">
           ${Object.entries(PROVIDERS).map(([k, v]) => `<option value="${k}" ${conn.provider === k ? 'selected' : ''}>${v.label}</option>`).join('')}
         </select></label>
-      ${PROVIDERS[conn.provider].needsUrl ? settingsField('Base URL', 'conn.baseUrl', 'url', 'placeholder="https://api.example.com/v1"', 'The URL that ends in /v1 (we add /chat/completions). Must be https and allow browser (CORS) requests.') : ''}
+      ${conn.provider === 'textcomp' ? `<label class="field"><span class="label">Server</span><select data-change="text-server">
+          <option value="">Choose to fill in the usual address…</option>
+          ${TEXT_SERVERS.map(([n, u], i) => `<option value="${i}">${esc(n)} (${esc(u)})</option>`).join('')}
+        </select><span class="hint">Your phone needs an <b>https</b> address that reaches the server (a tunnel such as KoboldCpp's Remote Tunnel or Cloudflare Tunnel), and the server must allow browser (CORS) requests.</span></label>` : ''}
+      ${PROVIDERS[conn.provider].needsUrl ? settingsField('Base URL', 'conn.baseUrl', 'url', 'placeholder="https://api.example.com/v1"', conn.provider === 'textcomp' ? 'Ends in /v1 (we add /completions).' : 'The URL that ends in /v1 (we add /chat/completions). Must be https and allow browser (CORS) requests.') : ''}
       <label class="field"><span class="label">API key${conn.provider === 'openrouter' ? '<span class="hint">Get one at openrouter.ai/keys</span>' : conn.provider === 'anthropic' ? '<span class="hint">Get one at console.anthropic.com</span>' : ''}</span>
         <input type="password" data-bind="conn.apiKey" id="api-key" placeholder="sk-…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <div class="field"><span class="label">Model</span>
@@ -2395,6 +2473,27 @@ function renderSettingsView(open) {
         <button class="btn danger" data-action="delete-conn">Delete profile</button>
       </div>
       <p class="hint">Keys are stored only on this device and sent only to the provider you choose.</p>` : '<p class="muted">Add a connection to start chatting.</p>'}`;
+
+  const ins = S.settings.instruct;
+  const curT = currentInstruct();
+  const savedT = (ins.saved || []).find((t) => t.id === ins.template);
+  const fmtBody = `
+    <p class="hint">Used by <b>Text completion</b> connections (local models). Chat APIs like OpenRouter and Claude format messages themselves and ignore this.</p>
+    <label class="field"><span class="label">Instruct template</span><select data-change="instruct-template">
+      ${Object.entries(INSTRUCT_TEMPLATES).map(([k, t]) => `<option value="${k}" ${ins.template === k ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+      ${(ins.saved || []).map((t) => `<option value="${t.id}" ${ins.template === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+    </select><span class="hint">Pick the one your model was trained on (it's usually on the model's page).</span></label>
+    <details class="section"><summary>${savedT ? 'Edit template' : 'Template details'}</summary><div class="sec-body">
+      ${INSTRUCT_FIELDS.map(([k, label]) => `<label class="field"><span class="label">${label}</span><textarea rows="1" data-ins="${k}" ${savedT ? '' : 'readonly'} spellcheck="false">${esc(curT[k] || '')}</textarea></label>`).join('')}
+      <label class="field inline"><span class="label">Character names</span><select data-ins-select="names_behavior" ${savedT ? '' : 'disabled'}>
+        ${[['force', 'Group chats only'], ['always', 'Always'], ['none', 'Never']].map(([v, l]) => `<option value="${v}" ${curT.names_behavior === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      ${savedT ? '' : '<p class="hint">Built-in templates are read-only — tap “Copy to edit”.</p>'}
+      <div class="row wrap">
+        <button class="btn sm" data-action="ins-copy">Copy to edit</button>
+        ${savedT ? '<button class="btn sm danger" data-action="ins-delete">Delete</button>' : ''}
+      </div>
+    </div></details>
+    <button class="btn" data-action="import-files">${ICONS.import} Import SillyTavern instruct template</button>`;
 
   const genBody = `
     ${settingsField('Max response tokens', 'preset.max_tokens')}
@@ -2606,9 +2705,10 @@ function renderSettingsView(open) {
       <button class="btn primary" data-action="import-zip">${ICONS.import} Import SillyTavern data (.zip)</button>
     </div>
     <div class="row wrap">
-      <button class="btn" data-action="backup-export">${ICONS.download} Export backup</button>
-      <button class="btn" data-action="backup-import">${ICONS.import} Restore backup</button>
+      <button class="btn" data-action="backup-export">${ICONS.download} Export backup / sync file</button>
+      <button class="btn" data-action="backup-import">${ICONS.import} Restore / sync from file</button>
     </div>
+    <p class="hint"><b>Using two devices?</b> Export here and save the file to iCloud Drive (or AirDrop it). On the other device, “Restore / sync from file” merges it in — for every character, chat, preset or lorebook the newer copy wins and nothing is deleted. Then export there and sync back the same way. Deletions don't carry over.</p>
     <p class="hint" id="storage-info">Everything is stored on this device only. Export a backup now and then.</p>
     <button class="btn danger sm" data-action="wipe">Delete all data</button>`;
 
@@ -2621,6 +2721,7 @@ function renderSettingsView(open) {
       ${sec('connection', 'API connection', connBody)}
       ${sec('preset', 'Preset (prompt manager)', presetBody)}
       ${sec('generation', 'Generation', genBody)}
+      ${sec('formatting', 'Formatting (text completion)', fmtBody)}
       ${sec('persona', 'Persona (you)', personaBody)}
       ${sec('lorebooks', 'Lorebooks', lorebookBody)}
       ${sec('regex', 'Regex scripts', regexBody)}
@@ -2703,7 +2804,7 @@ async function testConnection() {
     const text = await generate(conn, { ...S.settings.preset, max_tokens: 200, stream: false }, [
       { role: 'system', content: 'You are a connection test.' },
       { role: 'user', content: 'Reply with just the word OK.' },
-    ]);
+    ], { textFormat: isTextConn(conn) ? textFormatter('quiet') : null });
     toast(`Connected ✓ ${text ? '— model said: ' + text.trim().slice(0, 60) : ''}`, 4000);
   } catch (e) {
     toast(e.message, 8000);
@@ -2964,21 +3065,11 @@ function renderQrView(id) {
   if (wasSame) $('main.scroll').scrollTop = scroll;
 }
 
-const SLASH_HELP = `/send text            — send as you (no reply)
-/sendas name=Char text — post as a character
-/sys text             — narrator message
-/trigger [name]       — make the character (or a group member) reply
-/gen prompt           — generate with chat context → {{pipe}}
-/genraw prompt        — generate without chat context → {{pipe}}
-/impersonate, /continue, /regenerate
-/setinput text        — put text in the message box
-/input prompt         — ask for text → {{pipe}}
-/echo text, /popup text
-/setvar key=name value, /getvar name, /addvar key=name 1
-/incvar name, /decvar name, /flushvar name
-/setglobalvar key=name value, /getglobalvar name
-/preset name, /persona name, /delay ms, /pass text, /abort
-Chain commands with |  — {{pipe}} is the previous result.`;
+const SLASH_HELP = `${COMMANDS.join('\n')}
+
+Chain commands with |  — {{pipe}} is the previous result.
+Blocks: /if left={{getvar::hp}} right=0 rule=lte {: /sys You collapse. :}
+Loops: /times 3 {: /echo {{timesIndex}} :}   Scoped vars: /let x 5 | /echo {{var::x}}`;
 
 const numOrNull = (v) => (String(v).trim() === '' || Number.isNaN(Number(v)) ? null : Number(v));
 const splitList = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -2996,6 +3087,11 @@ async function exportBackup() {
   };
   for (const t of (settings.appearance && settings.appearance.saved) || []) {
     if (t.hasCss) data.themeCss[t.id] = (await db.get('kv', `themecss:${t.id}`)) || '';
+  }
+  data.sprites = {};
+  for (const c of data.characters) {
+    const sp = await spritesOf(c.id);
+    if (Object.keys(sp).length) data.sprites[c.id] = sp;
   }
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -3022,34 +3118,83 @@ async function importBackup() {
       }
     }
     validateRecord(data);
-    const replaceSettings = confirm(`Backup has ${data.characters.length} characters and ${data.chats.length} chats. They will be merged into this device.\n\nAlso replace your settings (connections, prompts, personas)?`);
-    for (const c of data.characters) await db.put('characters', c);
-    for (const c of data.chats) await db.put('chats', c);
+    // Two-way sync: for every record the newer copy wins; nothing is deleted.
+    const fileTime = Date.parse(data.exportedAt) || 0;
+    const fileNewer = fileTime > (S.settings.savedAt || 0);
+    const stamp = (x) => Math.max(x.updatedAt || 0, x.lastChatAt || 0);
+    const n = { chars: 0, chats: 0, lists: 0 };
+    const localChars = new Map((await db.getAll('characters')).map((c) => [c.id, c]));
+    for (const c of data.characters) {
+      const mine = localChars.get(c.id);
+      if (!mine || stamp(c) > stamp(mine)) { await db.put('characters', c); n.chars++; }
+    }
+    const localChats = new Map((await db.getAll('chats')).map((c) => [c.id, c]));
+    for (const c of data.chats) {
+      const mine = localChats.get(c.id);
+      if (!mine || (c.updatedAt || 0) > (mine.updatedAt || 0)) { await db.put('chats', c); n.chats++; }
+    }
     const merge = (key, list) => {
       if (!Array.isArray(list)) return;
       const ids = new Map(S[key].map((x, i) => [x.id, i]));
-      for (const x of list) { if (ids.has(x.id)) S[key][ids.get(x.id)] = x; else S[key].push(x); }
+      for (const x of list) {
+        if (!ids.has(x.id)) { S[key].push(x); n.lists++; continue; }
+        const mine = S[key][ids.get(x.id)];
+        const newer = (x.updatedAt || x.importedAt || 0) > (mine.updatedAt || mine.importedAt || 0) || (!x.updatedAt && !mine.updatedAt && fileNewer);
+        if (newer && JSON.stringify(mine) !== JSON.stringify(x)) { S[key][ids.get(x.id)] = x; n.lists++; }
+      }
     };
     if (data.themeCss && typeof data.themeCss === 'object') {
       for (const [id, css] of Object.entries(data.themeCss)) if (/^[A-Za-z0-9_-]+$/.test(id) && typeof css === 'string') await db.put('kv', css, `themecss:${id}`);
       S.themeCssId = null;
     }
+    if (data.sprites && typeof data.sprites === 'object') {
+      for (const [id, sp] of Object.entries(data.sprites)) {
+        if (!/^[A-Za-z0-9_-]+$/.test(id) || !sp || typeof sp !== 'object') continue;
+        const clean = Object.fromEntries(Object.entries(sp).filter(([k, v]) => /^[\w-]+$/.test(k) && X.isSafeImageSrc(v)));
+        const mine = await spritesOf(id);
+        if (fileNewer || !Object.keys(mine).length) await saveSprites(id, { ...mine, ...clean });
+      }
+    }
     merge('presets', data.presets); merge('lorebooks', data.lorebooks); merge('regex', data.regex); merge('groups', data.groups); merge('qr', data.qr);
     await savePresets(true); await saveLorebooks(true); await saveRegex(true); await saveGroups(true); await saveQr(true);
-    if (replaceSettings && data.settings) {
-      const keep = new Map(S.settings.connections.map((c) => [c.id, c.apiKey]));
-      S.settings = { ...defaultSettings(), ...data.settings };
-      S.settings.connections.forEach((c) => { if (!c.apiKey && keep.get(c.id)) c.apiKey = keep.get(c.id); });
-      S.settings.appearance = { ...structuredClone(DEFAULT_APPEARANCE), ...(S.settings.appearance || {}) };
-      S.settings.ext = { ...defaultSettings().ext, ...(S.settings.ext || {}) };
+    let settingsNote = 'kept yours (they are newer)';
+    if (data.settings) {
+      const local = S.settings;
+      const fresh = !(local.connections || []).length;
+      const theirsNewer = fresh || (data.settings.savedAt || fileTime) > (local.savedAt || 0);
+      S.settings = mergeSettings(local, data.settings, theirsNewer);
       applyLook();
       await saveSettings(true);
+      settingsNote = theirsNewer ? 'updated from the file (connections and personas from both kept)' : 'kept yours (newer), plus any new connections/personas from the file';
     }
-    toast('Backup restored');
+    toast(`Synced: ${n.chars} characters, ${n.chats} chats and ${n.lists} presets/lorebooks/other items updated or added; settings ${settingsNote}.`, 7000);
     render();
   } catch (e) {
     toast('Restore failed: ' + e.message, 5000);
   }
+}
+
+/** Merge two settings objects: lists (connections, personas, saved themes/templates) are combined by id; the rest follows the newer copy. */
+function mergeSettings(local, theirs, theirsNewer) {
+  const def = defaultSettings();
+  const [a, b] = theirsNewer ? [local, theirs] : [theirs, local]; // b wins
+  const out = { ...def, ...a, ...b };
+  for (const k of ['preset', 'prompt', 'ui', 'instruct']) out[k] = { ...def[k], ...(a[k] || {}), ...(b[k] || {}) };
+  out.ext = { ...def.ext };
+  for (const k of Object.keys(def.ext)) out.ext[k] = { ...def.ext[k], ...((a.ext || {})[k] || {}), ...((b.ext || {})[k] || {}) };
+  out.appearance = { ...structuredClone(DEFAULT_APPEARANCE), ...(a.appearance || {}), ...(b.appearance || {}) };
+  const union = (x = [], y = []) => { const m = new Map(x.map((i) => [i.id, i])); y.forEach((i) => m.set(i.id, { ...(m.get(i.id) || {}), ...i })); return [...m.values()]; };
+  out.connections = union(a.connections, b.connections);
+  const keys = new Map([...(theirs.connections || []), ...(local.connections || [])].filter((c) => c.apiKey).map((c) => [c.id, c.apiKey]));
+  out.connections.forEach((c) => { if (!c.apiKey && keys.get(c.id)) c.apiKey = keys.get(c.id); });
+  out.personas = union(a.personas, b.personas);
+  out.appearance.saved = union((a.appearance || {}).saved, (b.appearance || {}).saved);
+  out.instruct.saved = union((a.instruct || {}).saved, (b.instruct || {}).saved);
+  out.globalVars = { ...(a.globalVars || {}), ...(b.globalVars || {}) };
+  if (!out.connections.some((c) => c.id === out.activeConnection)) out.activeConnection = (out.connections[0] || {}).id || null;
+  if (!out.personas.length) out.personas = def.personas;
+  if (!out.personas.some((p) => p.id === out.activePersona)) out.activePersona = out.personas[0].id;
+  return out;
 }
 
 // ---------- event wiring ----------
@@ -3124,6 +3269,22 @@ const actions = {
   },
   'msg-regen': (el) => { if (!S.generating) { const m = findMsg(el.dataset.id); runGeneration('swipe', m && m.charId); } },
   'quick-actions': quickActions,
+  'st-button': (el) => { const r = S.buttonResolve; S.buttonResolve = null; closeSheet(); if (r) r(+el.dataset.i); },
+  'ins-copy': () => {
+    const ins = S.settings.instruct;
+    const t = { ...currentInstruct(), id: db.uid() };
+    t.name = `${t.name} (copy)`;
+    ins.saved = [...(ins.saved || []), t];
+    ins.template = t.id;
+    saveSettings(); rerenderSettings();
+  },
+  'ins-delete': () => {
+    const ins = S.settings.instruct;
+    if (!confirm('Delete this template?')) return;
+    ins.saved = (ins.saved || []).filter((x) => x.id !== ins.template);
+    ins.template = 'chatml';
+    saveSettings(); rerenderSettings();
+  },
   'qa-image': imageSheet,
   'img-gen': (el) => {
     const mode = el.dataset.mode;
@@ -3691,6 +3852,9 @@ document.addEventListener('input', (e) => {
   } else if (el.dataset.extEnhance) {
     S.settings.ext.enhance[el.dataset.extEnhance] = el.value;
     saveSettings();
+  } else if (el.dataset.ins) {
+    const t = (S.settings.instruct.saved || []).find((x) => x.id === S.settings.instruct.template);
+    if (t) { t[el.dataset.ins] = el.value; saveSettings(); }
   } else if (el.dataset.x) {
     const [g, k] = el.dataset.x.split('.');
     const numeric = ['maxImages', 'rate', 'topK', 'skipRecent', 'depth', 'minScore'].includes(k);
@@ -3755,6 +3919,11 @@ document.addEventListener('change', (e) => {
   if (el.dataset.extEnhanceToggle) {
     S.settings.ext.enhance[el.dataset.extEnhanceToggle] = el.checked;
     saveSettings();
+    return;
+  }
+  if (el.dataset.insSelect) {
+    const t = (S.settings.instruct.saved || []).find((x) => x.id === S.settings.instruct.template);
+    if (t) { t[el.dataset.insSelect] = el.value; saveSettings(); }
     return;
   }
   if (el.dataset.xToggle || el.dataset.xSelect) {
@@ -3844,12 +4013,19 @@ document.addEventListener('change', (e) => {
     else S.settings.activeConnection = el.value;
     saveSettings();
     rerenderSettings();
+  } else if (c === 'text-server') {
+    const srv = TEXT_SERVERS[+el.value];
+    if (srv) { activeConn().baseUrl = srv[1]; saveSettings(); rerenderSettings(); if (srv[2]) toast(srv[2], 6000); }
   } else if (c === 'conn-provider') {
     const conn = activeConn();
     const oldLabel = PROVIDERS[conn.provider].label;
     conn.provider = el.value;
     if (!conn.name || conn.name === oldLabel || conn.name === 'OpenRouter') conn.name = PROVIDERS[el.value].label;
     conn.model = '';
+    saveSettings();
+    rerenderSettings();
+  } else if (c === 'instruct-template') {
+    S.settings.instruct.template = el.value;
     saveSettings();
     rerenderSettings();
   } else if (c === 'select-preset') {
@@ -3921,6 +4097,7 @@ async function boot() {
     preset: { ...def.preset, ...settings.preset },
     prompt: { ...def.prompt, ...settings.prompt },
     ui: { ...def.ui, ...settings.ui },
+    instruct: { ...def.instruct, ...(settings.instruct || {}) },
     ext: {
       enhance: { ...def.ext.enhance, ...((settings.ext || {}).enhance || {}) },
       summarize: { ...def.ext.summarize, ...((settings.ext || {}).summarize || {}) },

@@ -77,7 +77,7 @@ export async function readEntry(file, entry) {
 export const readText = async (file, entry) => (await readEntry(file, entry)).text();
 export const readJson = async (file, entry) => JSON.parse(await readText(file, entry));
 
-const DIRS = ['characters', 'chats', 'groups', 'group chats', 'worlds', 'OpenAI Settings', 'themes', 'QuickReplies', 'User Avatars'];
+const DIRS = ['characters', 'chats', 'groups', 'group chats', 'worlds', 'OpenAI Settings', 'themes', 'QuickReplies', 'User Avatars', 'instruct'];
 
 /**
  * Sort zip entries into SillyTavern's folders, wherever the data folder sits inside the zip

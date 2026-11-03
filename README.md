@@ -25,20 +25,24 @@ requests go straight from your phone to the AI provider.
 - Built-in versions of ST's bundled extensions: **images in chat** (vision), **image generation** (OpenRouter image models,
   OpenAI-compatible, Pollinations; `/imagine`), **text-to-speech** (device voices, OpenAI-compatible, ElevenLabs; per-character voices),
   **translation** (via your model), **character expressions** (sprites; imported from ST), **chat recall** (keyword BM25 or embeddings)
-- **Quick Replies** (import ST quick reply sets) and a practical subset of **STscript** slash commands
+- **Quick Replies** (import ST quick reply sets) and **STscript**: pipes, `{: closures :}`, `/if`, `/while`, `/times`, `/let`/`/var`, `/run`, `/return`, `/break`, `/buttons`, `/qr`, math, text and chat commands
 - Lorebook **timed effects**: sticky, cooldown, delay
 - **Layered memory** inspired by [Summaryception](https://github.com/vadash/Extension-Summaryception): verbatim window, Layer 0 summaries,
   deeper merged layers, ghosted messages, `{{summaryception_memory}}`, optional Continuity Auditor (scene, bonds/gates, agendas, secrets)
 - **Appearance**: color themes, chat styles named after [Moonlit Echoes](https://github.com/RivelleDays/SillyTavern-MoonlitEchoesTheme)
   (Flat, Document, Echo, Whisper, Hush, Ripple, Tide), avatar shapes, background image, custom CSS; imports ST UI themes (including their custom CSS — the chat markup mirrors SillyTavern's so most theme CSS carries over) and Moonlit presets
-- Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API)
+- Backends: OpenRouter, any OpenAI-compatible API, Claude (Anthropic API), and **text completion** for local models
+  (KoboldCpp, Ollama, LM Studio, text-generation-webui, llama.cpp, TabbyAPI, vLLM) with **instruct templates**
+  (ChatML, Llama 3, Mistral, Gemma, Alpaca, Metharme, Command R; import ST templates)
 - **Import a whole SillyTavern data folder (.zip)**: characters, chats, group chats, personas (avatars, lorebooks, locks),
   lorebooks + World Info settings, presets (active one selected), global regex, quick replies, active UI theme, global variables
 - Character's Note (depth prompt), `<think>` auto-parsing, custom stopping strings, hide/unhide messages (`/hide`, `/unhide`),
   per-message token counts, delete single swipes, lorebook budget and recursion limits, persona locks
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 
-Not supported: arbitrary third-party ST extensions (they run inside SillyTavern itself; popular ones are rebuilt as built-ins), STscript closures and /if-style control flow.
+- **Sync between devices** via a sync file (iCloud Drive / AirDrop): newest copy of each record wins, nothing is deleted
+
+Not supported: arbitrary third-party ST extensions (they run inside SillyTavern itself; popular ones are rebuilt as built-ins), automatic cloud sync (needs a server).
 
 ## Install on iPhone
 Open the site in Safari → Share → **Add to Home Screen**.

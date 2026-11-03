@@ -4,7 +4,17 @@ export const PROVIDERS = {
   openrouter: { label: 'OpenRouter', base: 'https://openrouter.ai/api/v1', kind: 'openai', needsUrl: false },
   openai: { label: 'OpenAI-compatible', base: 'https://api.openai.com/v1', kind: 'openai', needsUrl: true },
   anthropic: { label: 'Claude (Anthropic)', base: 'https://api.anthropic.com/v1', kind: 'anthropic', needsUrl: false },
+  textcomp: { label: 'Text completion (KoboldCpp, Ollama, LM Studio, ooba…)', base: 'http://localhost:5001/v1', kind: 'text', needsUrl: true },
 };
+
+export const TEXT_SERVERS = [
+  ['KoboldCpp', 'http://localhost:5001/v1', 'Tick "Remote Tunnel" in KoboldCpp to get an https address for your phone.'],
+  ['Ollama', 'http://localhost:11434/v1', 'Start Ollama with OLLAMA_ORIGINS=* so browsers may connect.'],
+  ['LM Studio', 'http://localhost:1234/v1', 'Developer tab → enable CORS and "Serve on local network".'],
+  ['text-generation-webui (ooba)', 'http://localhost:5000/v1', 'Start with --api (and --listen for other devices).'],
+  ['llama.cpp server', 'http://localhost:8080/v1', 'Run llama-server with --host 0.0.0.0.'],
+  ['TabbyAPI', 'http://localhost:5000/v1', ''],
+];
 
 const kindOf = (conn) => (PROVIDERS[conn.provider] || PROVIDERS.openai).kind;
 
@@ -50,7 +60,7 @@ function networkError(e, conn) {
   const url = baseUrl(conn);
   if (url.startsWith('http://') && location.protocol === 'https:') {
     hint += ' This app runs on HTTPS, so iOS blocks plain http:// endpoints. Use an https:// URL (e.g. a tunnel).';
-  } else if (conn.provider === 'openai') {
+  } else if ((PROVIDERS[conn.provider] || {}).needsUrl) {
     hint += ' The server may not allow browser requests (CORS must be enabled on it).';
   }
   const err = new Error(hint);
@@ -223,14 +233,25 @@ function earliestStop(text, stops) {
  * think: { prefix, suffix } to move a leading <think> block into the reasoning.
  * Resolves to the final text.
  */
-export async function generate(conn, preset, messages, { signal, onToken, stop = [], think = null } = {}) {
+export async function generate(conn, preset, messages, { signal, onToken, stop = [], think = null, textFormat = null } = {}) {
   if (!conn) throw new Error('No API connection set up. Go to Settings → Connection.');
-  if (!conn.model) throw new Error('No model selected. Go to Settings → Connection.');
-  const anth = kindOf(conn) === 'anthropic';
-  const url = baseUrl(conn) + (anth ? '/messages' : '/chat/completions');
+  const kind = kindOf(conn);
+  if (!conn.model && kind !== 'text') throw new Error('No model selected. Go to Settings → Connection.');
+  const anth = kind === 'anthropic';
+  const text = kind === 'text';
+  const url = baseUrl(conn) + (anth ? '/messages' : text ? '/completions' : '/chat/completions');
   stop = (stop || []).filter((x) => typeof x === 'string' && x.length);
-  const body = anth ? anthropicBody(conn, preset, messages) : openaiBody(conn, preset, messages);
-  if (stop.length) {
+  let body;
+  if (text) {
+    // Text completion: the chat is formatted into one prompt with the instruct template.
+    const fmt = textFormat ? textFormat(messages) : { prompt: messages.map((m) => `${m.role}: ${m.content}`).join('\n') + '\nassistant:', stop: [] };
+    stop = [...new Set([...stop, ...fmt.stop])];
+    body = { ...openaiBody(conn, preset, []), prompt: fmt.prompt };
+    delete body.messages;
+    if (!conn.model) delete body.model;
+    if (stop.length) body.stop = stop.slice(0, 16);
+  } else body = anth ? anthropicBody(conn, preset, messages) : openaiBody(conn, preset, messages);
+  if (stop.length && !text) {
     if (anth) { const seq = stop.filter((x) => x.trim()).slice(0, 8); if (seq.length) body.stop_sequences = seq; }
     else if (!/api\.openai\.com/.test(url)) body.stop = stop.slice(0, 4); // OpenAI's newer models reject `stop`
   }
@@ -259,7 +280,7 @@ export async function generate(conn, preset, messages, { signal, onToken, stop =
       if (!raw && j.stop_reason === 'refusal') throw new Error('Claude declined to respond (refusal).');
     } else {
       if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
-      raw = (j.choices && j.choices[0] && (j.choices[0].message?.content ?? j.choices[0].text)) || '';
+      raw = (j.choices && j.choices[0] && (j.choices[0].message?.content ?? j.choices[0].text)) || j.content || '';
       const m = j.choices && j.choices[0] && j.choices[0].message;
       native = (m && (m.reasoning || m.reasoning_content)) || '';
     }

@@ -487,3 +487,5 @@ body:not(.chat-bubble) .mes.user .ch_name { text-align: left; }
 .sprite-grid img { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; background: var(--bg3); border-radius: 8px; }
 .sprite-grid figcaption { font-size: .68rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
+.btn-col { display: flex; flex-direction: column; gap: 8px; }
+.btn-col .btn.block { margin-top: 0; }
