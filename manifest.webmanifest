@@ -2,6 +2,8 @@
   "name": "PocketTavern",
   "short_name": "Tavern",
   "description": "Character chat frontend for OpenRouter, OpenAI-compatible APIs and Claude.",
+  "categories": ["entertainment", "social"],
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

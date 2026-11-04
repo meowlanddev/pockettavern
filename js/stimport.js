@@ -68,7 +68,7 @@ export async function readEntry(file, entry) {
   const blob = file.slice(start, start + entry.compSize);
   if (entry.method === 0) return blob;
   if (entry.method === 8) {
-    if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot unzip files (needs iOS 16.4 or newer).');
+    if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot unzip files (needs iOS 16.4+ or a recent Chrome).');
     return new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
   }
   throw new Error(`Unsupported compression in ${entry.name}`);

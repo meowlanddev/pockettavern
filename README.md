@@ -1,6 +1,6 @@
 # PocketTavern
 
-A SillyTavern-style character chat app for iPhone, built as an installable web app (PWA).
+A SillyTavern-style character chat app for iPhone and Android, built as an installable web app (PWA).
 It runs entirely on your device: characters, chats and API keys are stored locally in the browser and
 requests go straight from your phone to the AI provider.
 
@@ -42,12 +42,16 @@ requests go straight from your phone to the AI provider.
   **search inside chats** (all chats or one chat, jumps to the message), **import from chub.ai links** or direct card URLs
 - Prompt preview, SillyTavern chat import/export (.jsonl), full backup/restore
 
-- **Sync between devices** via a sync file (iCloud Drive / AirDrop): newest copy of each record wins, nothing is deleted
+- **Sync between devices** via a sync file (iCloud Drive / Google Drive / AirDrop / Quick Share): newest copy of each record wins, nothing is deleted
 
 Not supported: arbitrary third-party ST extensions (they run inside SillyTavern itself; popular ones are rebuilt as built-ins), automatic cloud sync (needs a server).
 
 ## Install on iPhone
 Open the site in Safari → Share → **Add to Home Screen**.
+
+## Install on Android
+Open the site in Chrome → tap the **Install** banner (or menu **⋮** → **Add to Home screen**).
+To build an APK, see [ANDROID.md](ANDROID.md).
 
 ## Development
 No build step. Serve the folder with any static server, e.g. `python3 -m http.server`.

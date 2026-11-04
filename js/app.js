@@ -73,7 +73,21 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const hue = (s) => { let h = 0; for (const ch of String(s || '')) h = (h * 31 + ch.codePointAt(0)) % 360; return h; };
 const isTouch = matchMedia('(pointer: coarse)').matches;
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const isStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isAndroid = /Android/i.test(navigator.userAgent);
+const isStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
+  || document.referrer.startsWith('android-app://');
+
+// Android/Chrome: keep the browser's install prompt so the home screen can offer an Install button.
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  if (S.booted && route().name === 'home' && !document.querySelector('.sheet-wrap')) render();
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  if (S.booted && route().name === 'home' && !document.querySelector('.sheet-wrap')) render();
+});
 
 let toastTimer;
 function toast(msg, ms = 2600) {
@@ -299,7 +313,7 @@ function stopSpeaking() {
   speaking = null;
 }
 
-/** iOS only plays audio started from a tap; prime the players during the send tap. */
+/** iOS (and Android Chrome) only play audio started from a tap; prime the players during the send tap. */
 function unlockAudio() {
   const cfg = S.settings.ext.tts;
   if (!cfg.enabled || S.audioUnlocked) return;
@@ -1005,27 +1019,52 @@ function pickFile(id) {
 
 // ---------- sheets (bottom modals) ----------
 function openSheet(html, cls = '') {
-  closeSheet();
+  closeSheet({ keepEntry: true });
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap';
   wrap.innerHTML = `<div class="backdrop" data-action="close-sheet"></div><div class="sheet ${cls}"><button class="icon-btn sm sheet-close" data-action="close-sheet" aria-label="Close">${ICONS.close}</button><div class="sheet-body">${html}</div></div>`;
   document.body.appendChild(wrap);
   requestAnimationFrame(() => wrap.classList.add('open'));
+  // Give the sheet its own history entry, so the Android back button (or a back
+  // swipe) closes the sheet instead of leaving the screen.
+  if (sheetPopPending) sheetNeedsEntry = true;
+  else if (!(history.state && history.state.sheet)) history.pushState({ sheet: true }, '');
   return wrap.querySelector('.sheet-body');
 }
-function closeSheet() {
+let sheetPopPending = false; // we called history.back() to drop a sheet's entry
+let sheetNeedsEntry = false; // a new sheet opened while that was still in flight
+function closeSheet(opts = {}) {
   if (S.buttonResolve) S.buttonResolve(null);
+  const had = document.querySelector('.sheet-wrap');
   document.querySelectorAll('.sheet-wrap').forEach((w) => w.remove());
+  if (had && !opts.fromPop && !opts.keepEntry && !sheetPopPending && history.state && history.state.sheet) {
+    sheetPopPending = true;
+    history.back();
+  }
 }
+window.addEventListener('popstate', () => {
+  if (sheetPopPending) {
+    sheetPopPending = false;
+    if (sheetNeedsEntry && document.querySelector('.sheet-wrap')) history.pushState({ sheet: true }, '');
+    sheetNeedsEntry = false;
+    return;
+  }
+  if (document.querySelector('.sheet-wrap')) closeSheet({ fromPop: true });
+});
 
-// ---------- viewport (iOS keyboard handling) ----------
+// ---------- viewport (on-screen keyboard handling) ----------
+// iOS shrinks only the visual viewport; Android shrinks the whole window. Track the
+// tallest height seen at the current width so the keyboard is detected on both.
+let fullH = { w: 0, h: 0 };
 function fitViewport() {
   const vv = window.visualViewport;
   const h = vv ? vv.height : window.innerHeight;
   const root = document.documentElement.style;
   root.setProperty('--app-h', `${h}px`);
   root.setProperty('--app-top', `${vv ? vv.offsetTop : 0}px`);
-  document.body.classList.toggle('kb-open', !!vv && window.innerHeight - vv.height > 120);
+  if (fullH.w !== window.innerWidth) fullH = { w: window.innerWidth, h: 0 };
+  fullH.h = Math.max(fullH.h, window.innerHeight);
+  document.body.classList.toggle('kb-open', fullH.h - h > 120);
 }
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitViewport);
@@ -1038,7 +1077,13 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   return { name: parts[0] || 'home', a: parts[1], b: parts[2] };
 }
-const go = (hash) => { location.hash = hash; };
+const go = (hash) => {
+  // Leaving from an open sheet: replace the sheet's history entry so Back doesn't land on it.
+  if (history.state && history.state.sheet && !sheetPopPending) {
+    document.querySelectorAll('.sheet-wrap').forEach((w) => w.remove());
+    location.replace(hash.startsWith('#') ? hash : `#${hash}`);
+  } else location.hash = hash;
+};
 
 async function render() {
   const r = route();
@@ -1111,6 +1156,8 @@ async function renderHome() {
     </header>
     <main class="scroll pad">
       ${isIOS && !isStandalone ? `<div class="banner">Install: tap <b>Share</b> ${ICONS.share} then <b>Add to Home Screen</b> for the full-screen app.</div>` : ''}
+      ${!isIOS && !isStandalone && installPrompt ? `<button class="banner" data-action="install-app">Install: tap here to add <b>PocketTavern</b> to your home screen as a full-screen app.</button>` : ''}
+      ${isAndroid && !isStandalone && !installPrompt ? `<div class="banner">Install: open the browser menu <b>⋮</b> and tap <b>Add to Home screen</b> (or <b>Install app</b>) for the full-screen app.</div>` : ''}
       ${!connReady(conn) ? `<button class="banner warn" data-action="go" data-to="#/settings/connection">No API connection yet — tap to set up OpenRouter, Claude or another API.</button>` : ''}
       ${all.length ? `
         <input class="search" type="search" placeholder="Search characters, tags, creators" value="${esc(S.homeQuery || '')}" data-input="home-search">
@@ -2947,7 +2994,7 @@ function renderSettingsView(open) {
       <button class="btn" data-action="backup-export">${ICONS.download} Export backup / sync file</button>
       <button class="btn" data-action="backup-import">${ICONS.import} Restore / sync from file</button>
     </div>
-    <p class="hint"><b>Using two devices?</b> Export here and save the file to iCloud Drive (or AirDrop it). On the other device, “Restore / sync from file” merges it in — for every character, chat, preset or lorebook the newer copy wins and nothing is deleted. Then export there and sync back the same way. Deletions don't carry over.</p>
+    <p class="hint"><b>Using two devices?</b> Export here and save the file to cloud storage like iCloud Drive or Google Drive (or send it over with AirDrop / Quick Share). On the other device, “Restore / sync from file” merges it in — for every character, chat, preset or lorebook the newer copy wins and nothing is deleted. Then export there and sync back the same way. Deletions don't carry over.</p>
     <p class="hint" id="storage-info">Everything is stored on this device only. Export a backup now and then.</p>
     <button class="btn danger sm" data-action="wipe">Delete all data</button>`;
 
@@ -3047,7 +3094,7 @@ async function testConnection() {
     toast('Checking the connection…', 10000);
     const why = await diagnose(conn);
     openSheet(`<div class="sheet-title">Connection problem</div><p class="error">${esc(e.message)}</p><p>${esc(why)}</p>
-      <p class="hint">Quick check: open <b>${esc(PROVIDERS[conn.provider] && !PROVIDERS[conn.provider].needsUrl ? PROVIDERS[conn.provider].base + '/models' : 'your server address')}</b> in Safari. If it shows text, your phone can reach it.</p>`);
+      <p class="hint">Quick check: open <b>${esc(PROVIDERS[conn.provider] && !PROVIDERS[conn.provider].needsUrl ? PROVIDERS[conn.provider].base + '/models' : 'your server address')}</b> in your phone's browser. If it shows text, your phone can reach it.</p>`);
     $('#toast').classList.remove('show');
   }
 }
@@ -3474,6 +3521,13 @@ function mergeSettings(local, theirs, theirsNewer) {
 const actions = {
   go: (el) => go(el.dataset.to),
   'go-back': () => (history.length > 1 ? history.back() : go('#/')),
+  'install-app': async () => {
+    const p = installPrompt;
+    if (!p) return;
+    installPrompt = null;
+    try { p.prompt(); await p.userChoice; } catch { /* ignore */ }
+    render();
+  },
   'close-sheet': closeSheet,
   'import-files': importFiles,
 
@@ -4481,6 +4535,7 @@ async function boot() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   await render();
+  S.booted = true;
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW registration failed', e));
   }

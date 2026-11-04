@@ -62,7 +62,7 @@ function networkError(e, conn) {
   let hint = `Network error — could not reach ${hostOf(conn)}${e && e.message ? ` (${e.message})` : ''}.`;
   const url = baseUrl(conn);
   if (url.startsWith('http://') && location.protocol === 'https:') {
-    hint += ' This app runs on HTTPS, so iOS blocks plain http:// endpoints. Use an https:// URL (e.g. a tunnel).';
+    hint += ' This app runs on HTTPS, so phone browsers block plain http:// endpoints. Use an https:// URL (e.g. a tunnel).';
   } else if ((PROVIDERS[conn.provider] || {}).needsUrl) {
     hint += ' The server may not allow browser requests (CORS must be enabled on it).';
   }
@@ -109,7 +109,7 @@ export async function diagnose(conn) {
       await fetch(probe, { method: 'GET', mode: 'no-cors', cache: 'no-store' });
       return `${host} answers, but blocks requests from this web app (CORS). For OpenRouter/Claude this shouldn't happen — tell Claude in the chat.`;
     } catch {
-      return `This device can't reach ${host} at all. Something is blocking it: a content blocker or ad-block app, a VPN or DNS filter (e.g. NextDNS), iCloud Private Relay, or a work/school Wi-Fi. Try turning those off, or switch to mobile data, then test again.`;
+      return `This device can't reach ${host} at all. Something is blocking it: a content blocker or ad-block app, a VPN or DNS filter (e.g. NextDNS), iCloud Private Relay, Android's Private DNS setting, or a work/school Wi-Fi. Try turning those off, or switch to mobile data, then test again.`;
     }
   }
 }
