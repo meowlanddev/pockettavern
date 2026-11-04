@@ -1,6 +1,6 @@
 // Service worker: makes the app installable and usable offline.
 // Network-first for app files, so updates show up on the next launch.
-const CACHE = 'pockettavern-v20';
+const CACHE = 'pockettavern-v21';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/card.js', './js/prompt.js', './js/api.js',
@@ -9,7 +9,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -25,8 +25,13 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   // Never touch API calls or other origins.
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+  // Always check GitHub for a newer copy (cache: 'no-cache'), so an update shows
+  // up the next time the app opens instead of up to 10 minutes later.
+  const fresh = req.mode === 'navigate'
+    ? fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
+    : fetch(req, { cache: 'no-cache' });
   e.respondWith(
-    fetch(req)
+    fresh
       .then((resp) => {
         if (resp.ok) {
           const copy = resp.clone();

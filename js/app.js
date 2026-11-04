@@ -2110,13 +2110,37 @@ function renderMessages(scrollBottom = false) {
   const again = anchorId && box.querySelector(`.msg[data-id="${CSS.escape(anchorId)}"]`);
   // At the bottom: keep following the newest message (unless editing).
   if (scrollBottom || (nearBottom && !S.editing)) box.scrollTop = box.scrollHeight;
-  else if (again) box.scrollTop += again.getBoundingClientRect().top - box.getBoundingClientRect().top - anchorOffset;
-  if (eb) {
-    // Editing a long message you tapped near its end: bring the edit box's top into view.
-    const r = eb.getBoundingClientRect(), b = box.getBoundingClientRect();
-    if (r.top < b.top) box.scrollTop += r.top - b.top - 12;
-    eb.focus({ preventScroll: true });
-  }
+  else if (again) pinScroll(box, anchorId, anchorOffset, !!eb);
+  if (eb) eb.focus({ preventScroll: true });
+}
+
+// Hold a message at the same spot on screen after a redraw. Re-applied for a
+// moment because pictures and styled HTML can finish laying out a little later,
+// and done instantly even when a theme turns on smooth scrolling.
+let pinToken = 0;
+function pinScroll(box, id, offset, editing) {
+  const token = ++pinToken;
+  let stop = false;
+  const cancel = () => { stop = true; };
+  box.addEventListener('touchstart', cancel, { once: true, passive: true });
+  box.addEventListener('wheel', cancel, { once: true, passive: true });
+  const apply = () => {
+    if (stop || token !== pinToken) return;
+    const el = box.querySelector(`.msg[data-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    const prev = box.style.scrollBehavior;
+    box.style.scrollBehavior = 'auto';
+    const b = box.getBoundingClientRect();
+    box.scrollTop += el.getBoundingClientRect().top - b.top - offset;
+    // Editing a long message you tapped near its end: show the top of the edit box.
+    const eb = editing && el.querySelector('#edit-box');
+    if (eb) { const r = eb.getBoundingClientRect(); if (r.top < b.top) box.scrollTop += r.top - b.top - 12; }
+    box.style.scrollBehavior = prev;
+  };
+  apply();
+  requestAnimationFrame(() => { apply(); requestAnimationFrame(apply); });
+  [120, 350, 700].forEach((ms) => setTimeout(apply, ms));
+  setTimeout(() => { box.removeEventListener('touchstart', cancel); box.removeEventListener('wheel', cancel); }, 800);
 }
 
 let streamRaf = 0;
