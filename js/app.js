@@ -2086,6 +2086,17 @@ function renderMessages(scrollBottom = false) {
   const box = $('#chat');
   if (!box) return;
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  // Remember where the reader is: the message being edited/opened, or else the
+  // first one on screen, and how far it sits from the top of the chat. Redrawing
+  // empties the chat for a moment, which would otherwise reset the scroll to the top.
+  const boxTop = box.getBoundingClientRect().top;
+  const focusId = S.editing || S.openActions;
+  let anchor = focusId && box.querySelector(`.msg[data-id="${CSS.escape(focusId)}"]`);
+  if (!anchor || anchor.getBoundingClientRect().bottom < boxTop || anchor.getBoundingClientRect().top > boxTop + box.clientHeight) {
+    anchor = [...box.querySelectorAll('.msg[data-id]')].find((el) => el.getBoundingClientRect().bottom > boxTop + 1) || null;
+  }
+  const anchorId = anchor && anchor.dataset.id;
+  const anchorOffset = anchor ? anchor.getBoundingClientRect().top - boxTop : 0;
   const msgs = S.chat.messages;
   const lc = liveContinuity(S.chat);
   S.liveAuditId = lc ? lc.msg.id : null;
@@ -2094,9 +2105,18 @@ function renderMessages(scrollBottom = false) {
     ? msgs.map((m, i) => msgHtml(m, i === msgs.length - 1)).join('')
     : `<div class="empty muted">Say hello to ${esc(S.char.name)}.</div>`;
   hydrateMessages(box);
-  if (scrollBottom || nearBottom) box.scrollTop = box.scrollHeight;
   const eb = $('#edit-box');
-  if (eb) { autosize(eb); eb.focus(); }
+  if (eb) autosize(eb);
+  const again = anchorId && box.querySelector(`.msg[data-id="${CSS.escape(anchorId)}"]`);
+  // At the bottom: keep following the newest message (unless editing).
+  if (scrollBottom || (nearBottom && !S.editing)) box.scrollTop = box.scrollHeight;
+  else if (again) box.scrollTop += again.getBoundingClientRect().top - box.getBoundingClientRect().top - anchorOffset;
+  if (eb) {
+    // Editing a long message you tapped near its end: bring the edit box's top into view.
+    const r = eb.getBoundingClientRect(), b = box.getBoundingClientRect();
+    if (r.top < b.top) box.scrollTop += r.top - b.top - 12;
+    eb.focus({ preventScroll: true });
+  }
 }
 
 let streamRaf = 0;
