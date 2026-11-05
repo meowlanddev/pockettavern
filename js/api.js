@@ -134,6 +134,9 @@ export async function listModels(conn) {
       name: m.name || m.display_name || id,
       ctx: m.context_length || m.max_input_tokens || null,
       price,
+      // US dollars per token, when the API publishes prices (OpenRouter does).
+      inPrice: m.pricing && m.pricing.prompt != null ? parseFloat(m.pricing.prompt) || 0 : null,
+      outPrice: m.pricing && m.pricing.completion != null ? parseFloat(m.pricing.completion) || 0 : null,
     };
   }).filter((m) => m.id);
 }

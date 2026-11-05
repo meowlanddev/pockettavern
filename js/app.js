@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.5';
+const VERSION = '1.9.6';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -2875,6 +2875,7 @@ function renderSettingsView(open) {
   const genBody = `
     ${settingsField('Max response tokens', 'preset.max_tokens')}
     ${settingsField('Context size (tokens)', 'preset.context_size', 'number', '', 'Older messages are dropped to fit')}
+    <div class="cost-est hint" id="cost-est">${costEstimateHtml()}</div>
     ${settingsField('Stream replies', 'preset.stream', 'checkbox')}
     ${settingsField('Temperature', 'preset.temperature')}
     ${settingsField('Top P', 'preset.top_p')}
@@ -3136,6 +3137,59 @@ function newConnection() {
   S.settings.connections.push(c);
   S.settings.activeConnection = c.id;
   saveSettings();
+}
+
+// ---------- cost estimate (like SillyTavern's "Max prompt cost") ----------
+// Prices come from OpenRouter's model list (dollars per token), fetched once and
+// kept on the device for a day.
+let priceCache = null; // { at, models: { id: [in, out] } }
+let priceLoading = null;
+function loadPrices() {
+  if (priceLoading) return priceLoading;
+  const conn = activeConn();
+  if (!conn || conn.provider !== 'openrouter') return Promise.resolve(null);
+  priceLoading = (async () => {
+    if (!priceCache) { try { priceCache = await db.get('kv', 'model-prices'); } catch { priceCache = null; } }
+    if (!priceCache || Date.now() - priceCache.at > 864e5) {
+      const list = await listModels(conn);
+      priceCache = { at: Date.now(), models: Object.fromEntries(list.filter((m) => m.inPrice != null).map((m) => [m.id, [m.inPrice, m.outPrice || 0]])) };
+      db.put('kv', priceCache, 'model-prices').catch(() => {});
+    }
+    return priceCache;
+  })().catch(() => null).finally(() => { priceLoading = null; });
+  return priceLoading;
+}
+
+const money = (x) => (x === 0 ? '$0' : x < 0.001 ? '<$0.001' : `$${x < 0.1 ? x.toFixed(3) : x.toFixed(2)}`);
+
+function costEstimateHtml() {
+  const conn = activeConn();
+  if (!conn || conn.provider !== 'openrouter') return '';
+  const model = String(conn.model || '').trim();
+  if (!model) return '';
+  if (!priceCache) {
+    loadPrices().then((c) => { const el = $('#cost-est'); if (c && el) el.innerHTML = costEstimateHtml(); });
+    return 'Estimated cost: loading prices…';
+  }
+  const pr = priceCache.models[model];
+  if (!pr) return `No price listed on OpenRouter for <b>${esc(model)}</b>.`;
+  const [inP, outP] = pr;
+  if (!inP && !outP) return 'This model is <b>free</b> on OpenRouter.';
+  const P = S.settings.preset;
+  const ctx = Number(P.context_size) || 0;
+  const reply = Number(P.max_tokens) || 0;
+  const maxPrompt = Math.max(0, ctx - reply) * inP;
+  const maxReply = reply * outP;
+  let now = '';
+  if (S.chat && S.char) {
+    try {
+      const { stats } = promptFor({ ...S.chat, vars: { ...(S.chat.vars || {}) } }, S.char, S.chat.messages);
+      const sent = (stats.system || 0) + (stats.history || 0);
+      now = `<br>Your current chat (${esc(S.char.name)}) sends ≈${sent.toLocaleString()} tokens: <b>≈${money(sent * inP)}</b> per message, plus the reply.`;
+    } catch { /* no estimate */ }
+  }
+  return `<b>Max prompt cost: ${money(maxPrompt)}</b> · max reply cost: ${money(maxReply)} · up to <b>${money(maxPrompt + maxReply)}</b> per message.${now}
+    <br><span class="muted">Prices for ${esc(model)}: $${+(inP * 1e6).toFixed(3)} in / $${+(outP * 1e6).toFixed(3)} out per million tokens. Thinking is billed like reply tokens. Estimates only.</span>`;
 }
 
 async function browseModels() {
@@ -4280,6 +4334,9 @@ document.addEventListener('input', (e) => {
     }
     setPath(el.dataset.bind, v);
     saveSettings();
+    if (/^(preset\.(context_size|max_tokens)|conn\.model)$/.test(el.dataset.bind)) {
+      const ce = $('#cost-est'); if (ce) ce.innerHTML = costEstimateHtml();
+    }
     if (el.dataset.bind === 'conn.name') {
       const opt = document.querySelector('select[data-change="select-conn"] option:checked');
       if (opt) opt.textContent = v || 'Connection';
