@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.2';
+const VERSION = '1.9.3';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -2007,7 +2007,7 @@ function msgHtml(msg, isLast) {
   const avatar = isUser ? persona.avatar : speaker.avatar;
   const raw = msg.swipes[msg.swipeIdx] || '';
   const generatingThis = S.generating === S.chat.id && isLast && !isUser;
-  const reasoning = (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '';
+  const reasoning = showThinking() ? (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '' : '';
   const editing = S.editing === msg.id;
   const n = msg.swipes.length;
   const imgs = Array.isArray(msg.images) ? msg.images.filter(X.isSafeImageSrc) : [];
@@ -2058,6 +2058,10 @@ function msgHtml(msg, isLast) {
       ${actions}
     </div>`;
 }
+
+// Thinking is only shown when "Request & show reasoning" is on. Off, it stays
+// hidden even if the model or API sends it anyway (or writes a <think> block).
+const showThinking = () => !!(S.settings.preset && S.settings.preset.show_thoughts);
 
 function reasoningHtml(text, thinking) {
   return `<details class="reasoning" ${thinking ? 'open' : ''}><summary>${thinking ? 'Thinking…' : 'Thought process'}</summary><div class="r-body">${esc(text)}</div></details>`;
@@ -2153,7 +2157,7 @@ function updateStreamingMessage(msg) {
     const el = box.querySelector(`.msg[data-id="${msg.id}"] .text`);
     if (!el) return;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-    const r = (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '';
+    const r = showThinking() ? (msg.reasoning && msg.reasoning[msg.swipeIdx]) || '' : '';
     if (r) {
       let d = box.querySelector(`.msg[data-id="${msg.id}"] details.reasoning`);
       if (!d) {
@@ -2835,7 +2839,7 @@ function renderSettingsView(open) {
     ${settingsField('Frequency penalty', 'preset.frequency_penalty')}
     ${settingsField('Presence penalty', 'preset.presence_penalty')}
     ${settingsField('Repetition penalty', 'preset.repetition_penalty', 'number', '', '1 = off')}
-    ${settingsField('Request & show reasoning', 'preset.show_thoughts', 'checkbox', '', "Shows the model's thinking above replies (OpenRouter reasoning models; Claude 4.6 or newer)")}
+    ${settingsField('Request & show reasoning', 'preset.show_thoughts', 'checkbox', '', "Shows the model's thinking in a box above replies (OpenRouter reasoning models; Claude 4.6 or newer). Off: thinking is never shown, even if the model sends it.")}
     ${settingsField('Auto-parse <think> blocks', 'preset.reasoning_parse', 'checkbox', '', 'Moves reasoning that a model writes at the start of its reply into the Thought process box')}
     <div class="row wrap">
       <label class="field grow"><span class="label">Reasoning prefix</span><input data-bind="preset.reasoning_prefix" value="${esc(p.reasoning_prefix || '<think>')}" autocapitalize="off" spellcheck="false"></label>

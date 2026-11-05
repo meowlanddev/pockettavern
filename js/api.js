@@ -178,9 +178,14 @@ function openaiBody(conn, preset, messages) {
   if (preset.top_k > 0) body.top_k = preset.top_k;
   if (preset.min_p > 0) body.min_p = preset.min_p;
   if (preset.repetition_penalty && preset.repetition_penalty !== 1) body.repetition_penalty = preset.repetition_penalty;
-  if (conn.provider === 'openrouter' && preset.show_thoughts) body.include_reasoning = true;
-  if (conn.provider === 'openrouter' && ['low', 'medium', 'high'].includes(preset.claude_effort)) {
-    body.reasoning = { effort: preset.claude_effort };
+  if (conn.provider === 'openrouter') {
+    // Reasoning models on OpenRouter send their thinking by default. With "show
+    // reasoning" off, ask for it to be left out (the model still thinks).
+    const reasoning = {};
+    if (['low', 'medium', 'high'].includes(preset.claude_effort)) reasoning.effort = preset.claude_effort;
+    if (preset.show_thoughts) body.include_reasoning = true;
+    else reasoning.exclude = true;
+    if (Object.keys(reasoning).length) body.reasoning = reasoning;
   }
   return body;
 }
