@@ -21,10 +21,27 @@ export function collectLoreEntries({ char, persona, lorebooks }) {
   }
   const entries = [];
   for (const b of books.values()) entries.push(...b.entries.map((e) => ({ ...e, _key: `${b.id}:${e.uid}` })));
-  if (char.character_book && char.character_book.entries && !char.disableEmbeddedBook) {
+  // Like SillyTavern: when the card's lorebook also exists as a linked lorebook
+  // (a SillyTavern export or data-folder import has both), use the linked one only.
+  const embeddedName = String((char.character_book && char.character_book.name) || '').trim().toLowerCase();
+  const linkedLoaded = [...books.values()].some((b) => {
+    const n = b.name.trim().toLowerCase();
+    return (linkedName && n === linkedName) || (embeddedName && n === embeddedName);
+  });
+  if (char.character_book && char.character_book.entries && !char.disableEmbeddedBook && !linkedLoaded) {
     entries.push(...(char._embeddedEntries || []).map((e) => ({ ...e, _key: e._key || `card:${char.id}:${e.uid}` })));
   }
-  return { entries, books: [...books.values()] };
+  // The same entry in two active lorebooks (e.g. one imported twice) is only sent once.
+  const seen = new Set();
+  const unique = entries.filter((e) => {
+    const content = String(e.content || '').trim();
+    if (!content) return true;
+    const sig = `${(e.keys || []).join('|')}\u0000${content}`;
+    if (seen.has(sig)) return false;
+    seen.add(sig);
+    return true;
+  });
+  return { entries: unique, books: [...books.values()] };
 }
 
 function formatExamples(raw, heading) {
@@ -271,6 +288,9 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
       included: hist.length - injections.length,
       total: history.filter((h) => msgText(h)).length,
       worldInfo: wi.count,
+      worldInfoTokens: (wi.active || []).reduce((n, e) => n + estTokens(e.content || ''), 0),
+      worldInfoList: (wi.active || []).map((e) => ({ name: e.comment || (e.keys || []).slice(0, 3).join(', ') || 'Entry', tokens: estTokens(e.content || '') })),
+      reply: samplers.max_tokens || 0,
       worldInfoDropped: wi.droppedByBudget || 0,
       preset: pr.name,
     },

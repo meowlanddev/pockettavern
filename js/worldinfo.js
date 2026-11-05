@@ -255,5 +255,6 @@ export function activateWorldInfo({ entries, history, char, persona, defaultDept
     }
   }
   out.count = sorted.length;
+  out.active = sorted;
   return out;
 }

@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.4';
+const VERSION = '1.9.5';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -1047,6 +1047,7 @@ window.addEventListener('popstate', () => {
     sheetPopPending = false;
     if (sheetNeedsEntry && document.querySelector('.sheet-wrap')) history.pushState({ sheet: true }, '');
     sheetNeedsEntry = false;
+    if (goAfterPop) { const h = goAfterPop; goAfterPop = null; go(h); }
     return;
   }
   if (document.querySelector('.sheet-wrap')) closeSheet({ fromPop: true });
@@ -1077,9 +1078,13 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   return { name: parts[0] || 'home', a: parts[1], b: parts[2] };
 }
+let goAfterPop = null; // a screen to open once the sheet's history entry is gone
 const go = (hash) => {
+  // A sheet was just closed and its history entry is still being removed: open
+  // the screen after that, or the pending "back" would undo it.
+  if (sheetPopPending) { goAfterPop = hash; return; }
   // Leaving from an open sheet: replace the sheet's history entry so Back doesn't land on it.
-  if (history.state && history.state.sheet && !sheetPopPending) {
+  if (history.state && history.state.sheet) {
     document.querySelectorAll('.sheet-wrap').forEach((w) => w.remove());
     location.replace(hash.startsWith('#') ? hash : `#${hash}`);
   } else location.hash = hash;
@@ -1699,6 +1704,12 @@ async function importStZip(file) {
     const activeName = st.oai_settings && st.oai_settings.preset_settings_openai;
     const active = activeName && S.presets.find((p) => p.name === activeName);
     if (active) { S.settings.activePreset = active.id; applyPresetSamplers(active); }
+    // SillyTavern's sliders can differ from what's saved in the preset file; use
+    // the values it was actually running with.
+    const oai = st.oai_settings || {};
+    const liveCtx = Number(oai.openai_max_context), liveMax = Number(oai.openai_max_tokens);
+    if (liveCtx > 0) S.settings.preset.context_size = liveCtx;
+    if (liveMax > 0) S.settings.preset.max_tokens = liveMax;
     await savePresets(true);
 
     // Regex (global scripts live in settings.json)
@@ -2294,7 +2305,12 @@ async function runGeneration(mode, speakerId) {
   const history = mode === 'continue' ? chat.messages.slice() : chat.messages.slice(0, chat.messages.indexOf(msg));
   let recall = '';
   try { recall = await computeRecall(chat, history); } catch (e) { toast(e.message, 5000); }
-  const { messages, vars, timed } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal', recall });
+  const { messages, vars, timed, stats } = promptFor(chat, char, history, { mode: mode === 'continue' ? 'continue' : 'normal', recall });
+  // Once per chat (per session): say so when the AI can barely see the chat.
+  if (stats && stats.total > 4 && stats.included <= 2 && !(S.contextWarned || (S.contextWarned = new Set())).has(chat.id)) {
+    S.contextWarned.add(chat.id);
+    setTimeout(() => toast(`Heads up: the AI can only see the last ${stats.included} message${stats.included === 1 ? '' : 's'} of this chat, so it will forget recent details. Raise Context size in Settings → Generation (⋯ → View prompt shows why).`, 9000), 300);
+  }
   chat.vars = vars;
   chat.wiTimed = timed;
   const prevReasoning = msg.reasoning[idx] || '';
@@ -2526,7 +2542,9 @@ function viewPrompt() {
     <div class="sheet-title">Prompt preview</div>
     <p class="muted small">Preset: <b>${esc(stats.preset)}</b>. ≈${stats.system} tokens of prompts/character info, ≈${stats.history} tokens of chat history.
       ${stats.included}/${stats.total} messages fit in the ${S.settings.preset.context_size}-token context.
-      ${stats.worldInfo ? `${stats.worldInfo} lorebook entr${stats.worldInfo === 1 ? 'y' : 'ies'} active.` : ''}</p>
+      ${stats.worldInfo ? `${stats.worldInfo} lorebook entr${stats.worldInfo === 1 ? 'y' : 'ies'} active (≈${stats.worldInfoTokens} tokens).` : ''}</p>
+    ${stats.total > 3 && stats.included < Math.min(stats.total, 6) ? `<p class="banner warn">The AI can only see the last ${stats.included} message${stats.included === 1 ? '' : 's'}. Older ones are cut to fit the ${S.settings.preset.context_size}-token context (≈${stats.reply} more are kept free for the reply). Raise <b>Context size</b> in Settings → Generation, use shorter replies, or turn off lorebooks you don't need.</p>` : ''}
+    ${stats.worldInfoList && stats.worldInfoList.length ? `<details class="pv-lore"><summary class="muted small">Lorebook entries sent (${stats.worldInfoList.length})</summary><ul class="small">${stats.worldInfoList.map((e) => `<li>${esc(e.name)} <span class="muted">≈${e.tokens}</span></li>`).join('')}</ul></details>` : ''}
     ${messages.map((m) => `<div class="pv"><div class="pv-role">${m.role}</div><pre>${esc(m.content)}</pre></div>`).join('')}
   `, 'tall');
 }
