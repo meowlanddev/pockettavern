@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.3';
+const VERSION = '1.9.4';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -690,7 +690,7 @@ async function enhanceDraft() {
     const out = normalizeGeneratedText(await quietGenerate(buildEnhancementPrompt(draft, S.settings.ext.enhance), { signal: S.abort.signal }));
     if (!out) throw new Error('The model returned an empty reply.');
     S.enhanceOriginal = { chatId: chat.id, text: draft };
-    if (S.chat === chat) { input.value = out; chat.draftInput = out; autosize(input); updateEnhanceButton(); }
+    if (S.chat === chat) { input.value = out; setDraft(chat.id, out); autosize(input); updateEnhanceButton(); }
     toast('Reply enhanced. Restore the original from ✨ if you want it back.', 4000);
   } catch (e) {
     if (e.name !== 'AbortError') toast(e.message || 'Could not enhance the reply.', 6000);
@@ -707,7 +707,7 @@ function restoreDraft() {
   if (!o || o.chatId !== S.chat.id) return toast('No enhanced draft to restore.');
   const input = $('#send_textarea');
   input.value = o.text;
-  S.chat.draftInput = o.text;
+  setDraft(S.chat.id, o.text);
   S.enhanceOriginal = null;
   autosize(input);
   updateEnhanceButton();
@@ -809,7 +809,7 @@ function scriptApi(chat) {
     impersonate: () => runImpersonate(),
     cont: () => runGeneration('continue', lastSpeakerId()),
     regen: () => runGeneration('swipe', lastSpeakerId()),
-    setInput: (t) => { const i = $('#send_textarea'); if (i) { i.value = t; chat.draftInput = t; autosize(i); updateEnhanceButton(); } },
+    setInput: (t) => { const i = $('#send_textarea'); if (i) { i.value = t; setDraft(chat.id, t); autosize(i); updateEnhanceButton(); } },
     input: async (p, def) => window.prompt(p || 'Input', def) ?? '',
     popup: async (t) => window.alert(t),
     echo: (t) => toast(t, 4000),
@@ -1878,6 +1878,32 @@ async function createChat(char) {
   return chat;
 }
 
+// Unsent text in the message box, per chat. Kept apart from the chat itself
+// (which is reloaded whenever the chat screen opens) and saved on the device,
+// so leaving the chat, changing the model or closing the app doesn't lose it.
+let drafts = {};
+let draftTimer = 0;
+function getDraft(chat) {
+  if (!chat) return '';
+  if ('draftInput' in chat) { // older versions kept it on the chat itself
+    if (chat.draftInput && !(chat.id in drafts)) setDraft(chat.id, chat.draftInput);
+    delete chat.draftInput;
+  }
+  return drafts[chat.id] || '';
+}
+function setDraft(chatId, text) {
+  if (!chatId) return;
+  if (text) drafts[chatId] = text; else delete drafts[chatId];
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDrafts, 400);
+}
+function saveDrafts() {
+  clearTimeout(draftTimer);
+  return db.put('kv', drafts, 'drafts').catch((e) => console.warn('Saving draft failed', e));
+}
+addEventListener('pagehide', saveDrafts);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveDrafts(); });
+
 async function saveChat(chat) {
   chat.updatedAt = Date.now();
   await db.put('chats', chat);
@@ -1961,9 +1987,9 @@ async function renderChatView(charId, chatId) {
       </footer>
     </div>`;
   const input = $('#send_textarea');
-  input.value = S.chat.draftInput || '';
+  input.value = getDraft(S.chat);
   autosize(input);
-  input.addEventListener('input', () => { autosize(input); S.chat.draftInput = input.value; updateEnhanceButton(); });
+  input.addEventListener('input', () => { autosize(input); setDraft(S.chat.id, input.value); updateEnhanceButton(); });
   updateEnhanceButton();
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (S.settings.ui.enterSends || !isTouch)) {
@@ -2190,7 +2216,7 @@ async function sendMessage() {
   const chat = S.chat;
   if (text.startsWith('/') && /^\/[a-z#]/i.test(text)) {
     input.value = '';
-    chat.draftInput = '';
+    setDraft(chat.id, '');
     autosize(input);
     updateEnhanceButton();
     return runSlash(text);
@@ -2213,7 +2239,7 @@ async function sendMessage() {
     S.pending = null;
     renderAttachRow();
     input.value = '';
-    chat.draftInput = '';
+    setDraft(chat.id, '');
     autosize(input);
     updateEnhanceButton();
     await saveChat(chat);
@@ -2366,7 +2392,7 @@ async function runImpersonate() {
     });
     const name = activePersona().name;
     const out = (text || input.value || '').replace(/^\s+/, '').replace(new RegExp(`^${(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*`), '');
-    if (S.chat === chat) { input.value = out; chat.draftInput = out; autosize(input); }
+    if (S.chat === chat) { input.value = out; setDraft(chat.id, out); autosize(input); }
   } catch (e) {
     if (e.name !== 'AbortError') toast(e.message || String(e), 8000);
   } finally {
@@ -4206,7 +4232,7 @@ const actions = {
     if (!confirm('Delete ALL characters, chats and settings on this device?')) return;
     if (!confirm('Really? This cannot be undone.')) return;
     await db.clear('characters'); await db.clear('chats'); await db.clear('kv');
-    S.presets = []; S.lorebooks = []; S.regex = []; S.groups = []; S.qr = [];
+    S.presets = []; S.lorebooks = []; S.regex = []; S.groups = []; S.qr = []; drafts = {};
     S.settings = defaultSettings();
     applyLook();
     await saveSettings(true);
@@ -4578,6 +4604,7 @@ async function boot() {
   if (!settings || plainKeys) await saveSettings(true);
   applyMediaPolicy();
   await applyLook();
+  try { drafts = (await db.get('kv', 'drafts')) || {}; } catch { drafts = {}; }
   for (const key of ['presets', 'lorebooks', 'regex', 'groups', 'qr']) {
     try { S[key] = (await db.get('kv', key)) || []; } catch { S[key] = []; }
   }
