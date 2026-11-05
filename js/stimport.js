@@ -8,13 +8,45 @@ async function bytes(file, start, end) {
   return new DataView(await file.slice(start, end).arrayBuffer());
 }
 
-/** List the entries of a zip file. Supports stored/deflated entries and zip64. */
-export async function openZip(file) {
+async function findEnd(file) {
   const tailLen = Math.min(file.size, 65557);
   const tail = await bytes(file, file.size - tailLen, file.size);
-  let eocd = -1;
-  for (let i = tail.byteLength - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw new Error('Not a zip file (or it is damaged)');
+  for (let i = tail.byteLength - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) return { tail, eocd: i };
+  return { tail, eocd: -1 };
+}
+
+/** Explain why a file isn't a readable zip, from its first bytes. */
+async function notZipError(file) {
+  if (!file.size) {
+    return new Error("This file is empty (0 bytes). The download may not have finished, or the file app didn't hand the file over. Save the zip to your phone's Downloads folder first, then import it from there.");
+  }
+  const h = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  const is = (...b) => b.every((x, i) => h[i] === x);
+  if (is(0x50, 0x4b, 0x03, 0x04)) {
+    return new Error("This zip is incomplete: its end is missing, which usually means the download or copy was cut off. Download or copy it again, wait until it finishes, then import it. (If it's a big folder, make sure the file size matches the one on your computer.)");
+  }
+  if (is(0x37, 0x7a, 0xbc, 0xaf)) return new Error('This is a .7z archive, not a .zip. Re-compress the folder as a regular .zip (on Windows: right-click → Send to → Compressed (zipped) folder).');
+  if (is(0x52, 0x61, 0x72, 0x21)) return new Error('This is a .rar archive, not a .zip. Re-compress the folder as a regular .zip (on Windows: right-click → Send to → Compressed (zipped) folder).');
+  if (is(0x1f, 0x8b)) return new Error('This is a .tar.gz / .gz archive, not a .zip. Re-compress the folder as a regular .zip.');
+  if (h[0] === 0x7b || h[0] === 0x5b) return new Error("This is a JSON file, not a zip. Use the import button on the home screen for single SillyTavern files.");
+  if (is(0x3c)) return new Error("This file is a web page, not a zip. The download link probably needed you to sign in or confirm first; open it in the browser, download the real file, then import that.");
+  return new Error("This file isn't a zip archive. Zip your SillyTavern data folder (SillyTavern/data/default-user) and import that .zip.");
+}
+
+/** List the entries of a zip file. Supports stored/deflated entries and zip64. */
+export async function openZip(file) {
+  let { tail, eocd } = await findEnd(file);
+  // Some phone file providers (cloud drives, some Android file apps) don't hand
+  // over the end of a file reliably when it's read in pieces. Read it whole and try again.
+  let src = null;
+  if (eocd < 0 && file.size > 0 && file.size < 1.5e9) {
+    try {
+      const whole = new Blob([await file.arrayBuffer()]);
+      ({ tail, eocd } = await findEnd(whole));
+      if (eocd >= 0) { src = whole; file = whole; }
+    } catch { /* fall through to the explanation */ }
+  }
+  if (eocd < 0) throw await notZipError(file);
   let count = tail.getUint16(eocd + 10, true);
   let cdSize = tail.getUint32(eocd + 12, true);
   let cdOffset = tail.getUint32(eocd + 16, true);
@@ -55,13 +87,14 @@ export async function openZip(file) {
       }
       e += 4 + len;
     }
-    if (!name.endsWith('/')) entries.push({ name: name.replace(/\\/g, '/'), method, compSize, size, offset });
+    if (!name.endsWith('/')) entries.push({ name: name.replace(/\\/g, '/'), method, compSize, size, offset, ...(src ? { src } : {}) });
     p += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
 }
 
 export async function readEntry(file, entry) {
+  if (entry.src) file = entry.src; // the zip had to be read into memory (see openZip)
   const lh = await bytes(file, entry.offset, entry.offset + 30);
   if (lh.getUint32(0, true) !== 0x04034b50) throw new Error(`Bad zip entry: ${entry.name}`);
   const start = entry.offset + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
@@ -71,7 +104,7 @@ export async function readEntry(file, entry) {
     if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot unzip files (needs iOS 16.4+ or a recent Chrome).');
     return new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
   }
-  throw new Error(`Unsupported compression in ${entry.name}`);
+  throw new Error(`${entry.name} uses a compression type PocketTavern can't open (method ${entry.method}). Re-zip the folder with your computer's built-in zip (Windows: Send to → Compressed folder; Mac: Compress) instead of 7-Zip/WinRAR's special modes.`);
 }
 
 export const readText = async (file, entry) => (await readEntry(file, entry)).text();
