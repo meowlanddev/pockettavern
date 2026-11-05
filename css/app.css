@@ -517,3 +517,8 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 
 /* message HTML adapts to the chat column's width (render.js @container chat) */
 #chat { container: chat / inline-size; }
+
+/* regex editor test mode */
+.rx-test { margin: 6px 0 10px; }
+.rx-test > summary { cursor: pointer; font-weight: 600; color: var(--accent); padding: 6px 0; }
+.rx-test-out { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg3); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-height: 2.4em; margin: 0; font: inherit; font-size: .9rem; }

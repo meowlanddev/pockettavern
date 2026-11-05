@@ -7,7 +7,7 @@ import { INSTRUCT_TEMPLATES, INSTRUCT_FIELDS, importInstruct, messagesToText } f
 import * as X from './extras.js';
 import { evaluateMacros } from './macros.js';
 import { normalizeBook, normalizeEntry, exportBook, POSITIONS, LOGIC } from './worldinfo.js';
-import { applyRegex, parseRegexFile, normalizeScript, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
+import { applyRegex, parseRegexFile, normalizeScript, runScript as runRegexScript, regexFromString, PLACEMENT, PLACEMENT_LABELS } from './regex.js';
 import { importSTPreset, exportSTPreset, isSTPreset, MARKER_LABELS, AUTO_SLOTS } from './preset.js';
 import { formatMessage, renderInto, setThemeShadowCss, setExternalMedia } from './render.js';
 import { runScript, COMMANDS } from './stscript.js';
@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.6';
+const VERSION = '1.9.7';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -776,6 +776,12 @@ function memberByName(name) {
   return groupMembers().find((c) => c.name.toLowerCase() === n) || groupMembers().find((c) => c.name.toLowerCase().startsWith(n)) || null;
 }
 
+// Regex scripts set to "Slash commands" edit text that /send, /sendas and /sys add.
+function slashRx(text) {
+  const env = { char: S.char ? S.char.name : '', user: activePersona().name, vars: { ...((S.chat && S.chat.vars) || {}) } };
+  return applyRegex(String(text ?? ''), scriptsFor(S.char), { placement: PLACEMENT.SLASH, macro: (t) => evaluateMacros(t, env) });
+}
+
 function scriptApi(chat) {
   const persist = () => { saveChat(chat); saveSettings(); };
   const push = async (msg) => { chat.messages.push({ id: db.uid(), swipeIdx: 0, ts: Date.now(), ...msg }); await saveChat(chat); if (S.chat === chat) renderMessages(true); };
@@ -785,15 +791,15 @@ function scriptApi(chat) {
     vars: () => chat.vars || (chat.vars = {}),
     globals: () => S.settings.globalVars || (S.settings.globalVars = {}),
     save: persist,
-    send: (text) => push({ role: 'user', swipes: [text] }),
+    send: (text) => push({ role: 'user', swipes: [slashRx(text)] }),
     sendAs: (name, text) => {
       if (S.group) {
         const c = memberByName(name) || S.members.get(lastSpeakerId()) || groupMembers()[0];
-        return push({ role: 'assistant', swipes: [text], charId: c.id, name: c.name });
+        return push({ role: 'assistant', swipes: [slashRx(text)], charId: c.id, name: c.name });
       }
-      return push({ role: 'assistant', swipes: [text] });
+      return push({ role: 'assistant', swipes: [slashRx(text)] });
     },
-    sys: (text) => push({ role: 'system', swipes: [text], name: 'Narrator' }),
+    sys: (text) => push({ role: 'system', swipes: [slashRx(text)], name: 'Narrator' }),
     trigger: async (name) => {
       if (S.group && chat.groupId === S.group.id) {
         const c = memberByName(name);
@@ -2087,7 +2093,7 @@ function msgHtml(msg, isLast) {
       <div class="mesAvatarWrapper"><div class="avatar">${avatarHtml(avatar, name, 'av sm')}</div></div>
       <div class="bubble mes_block" data-action="toggle-msg" data-id="${msg.id}">
         <div class="name ch_name"><div class="flex-container"><div class="alignItemsBaseline"><span class="name_text">${esc(name)}</span>${msg.ghost ? '<span class="ghost-tag" title="Covered by long-term memory; not sent to the AI">👻 in memory</span>' : ''}${msg.hidden ? '<span class="ghost-tag" title="Hidden from the AI">🙈 hidden</span>' : ''}${live ? `<span class="audit-tag" title="Continuity audited">✓${isLiveAudit ? ' ●' : ''}</span>` : ''}</div>${when ? `<small class="timestamp">${esc(when)}</small>` : ''}<small class="mesIDDisplay">#${mesid}</small></div></div>
-        ${reasoning && !editing ? reasoningHtml(reasoning, generatingThis && !raw) : ''}
+        ${reasoning && !editing ? reasoningHtml(applyRegex(reasoning, scriptsFor(S.char), { placement: PLACEMENT.REASONING, isMarkdown: true }), generatingThis && !raw) : ''}
         ${imagesHtml}
         ${body}
         ${swipes}
@@ -2339,6 +2345,10 @@ async function runGeneration(mode, speakerId) {
     if (msg.swipes[idx] && out) {
       const env = { char: char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
       msg.swipes[idx] = applyRegex(msg.swipes[idx], scriptsFor(char), { placement: PLACEMENT.AI, macro: (t) => evaluateMacros(t, env) });
+    }
+    if (msg.reasoning && msg.reasoning[idx]) {
+      const env = { char: char.name, user: activePersona().name, vars: { ...(chat.vars || {}) } };
+      msg.reasoning[idx] = applyRegex(msg.reasoning[idx], scriptsFor(char), { placement: PLACEMENT.REASONING, macro: (t) => evaluateMacros(t, env) });
     }
   } catch (e) {
     if (e.name !== 'AbortError') failed = e;
@@ -2940,7 +2950,7 @@ function renderSettingsView(open) {
       <label class="toggle mini"><input type="checkbox" data-rx-toggle="${i}" ${r.disabled ? '' : 'checked'}><i></i></label>
       <button class="grow lr-btn" data-action="rx-edit" data-i="${i}">
         <span class="lr-title">${esc(r.scriptName)}</span>
-        <span class="hint">${r.placement.map((x) => PLACEMENT_LABELS[x] || x).join(', ')}${r.markdownOnly ? ' · display only' : ''}${r.promptOnly ? ' · prompt only' : ''}</span>
+        <span class="hint">${r.placement.map((x) => PLACEMENT_LABELS[x] || x).join(', ')}${r.markdownOnly ? ' · chat display' : ''}${r.promptOnly ? ' · outgoing prompt' : ''}</span>
       </button>
     </div>`).join('') || '<p class="muted">No regex scripts yet.</p>'}
     <p class="hint">Scripts embedded in character cards run too (toggle per character in Edit character).</p>
@@ -3435,25 +3445,68 @@ function regexEdit(i) {
   const chk = (id, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i></label>`;
   openSheet(`
     <div class="sheet-title">${i === -1 ? 'New regex script' : esc(r.scriptName)}</div>
-    <label class="field"><span class="label">Name</span><input id="rx-name" value="${esc(r.scriptName)}"></label>
-    <label class="field"><span class="label">Find regex</span><input id="rx-find" value="${esc(r.findRegex)}" autocapitalize="off" spellcheck="false" placeholder="/pattern/g"></label>
-    <label class="field"><span class="label">Replace with <span class="hint">($1, {{match}}, macros)</span></span><textarea id="rx-replace" rows="5" spellcheck="false">${esc(r.replaceString)}</textarea></label>
-    <label class="field"><span class="label">Trim out <span class="hint">(one per line)</span></span><textarea id="rx-trim" rows="2">${esc(r.trimStrings.join('\n'))}</textarea></label>
+    <label class="field"><span class="label">Script name</span><input id="rx-name" value="${esc(r.scriptName)}"></label>
+    <label class="field"><span class="label">Find regex</span><input id="rx-find" value="${esc(r.findRegex)}" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="/pattern/g"></label>
+    <label class="field"><span class="label">Replace with <span class="hint">({{match}}, $1, $2, $&lt;name&gt;, macros)</span></span><textarea id="rx-replace" rows="4" spellcheck="false">${esc(r.replaceString)}</textarea></label>
+    <label class="field"><span class="label">Trim out <span class="hint">(one per line, removed from each match first)</span></span><textarea id="rx-trim" rows="2">${esc(r.trimStrings.join('\n'))}</textarea></label>
+    <details class="rx-test"><summary>Test mode</summary>
+      <label class="field"><span class="label">Try it on</span><textarea id="rx-test-in" rows="3" spellcheck="false" placeholder="Type or paste some text…"></textarea></label>
+      <div class="field"><span class="label">Result</span><pre id="rx-test-out" class="rx-test-out"></pre></div>
+    </details>
     <div class="field"><span class="label">Affects</span>
       ${Object.entries(PLACEMENT_LABELS).map(([k, v]) => `<label class="check"><input type="checkbox" data-rx-place="${k}" ${r.placement.includes(+k) ? 'checked' : ''}> ${v}</label>`).join('')}
     </div>
-    ${chk('rx-md', r.markdownOnly, 'Display only', 'Changes how messages look, not the saved text')}
-    ${chk('rx-prompt', r.promptOnly, 'Prompt only', 'Changes what is sent to the AI, not the saved text')}
-    ${chk('rx-edit', r.runOnEdit, 'Run on edit')}
+    <h4 class="sub">Other options</h4>
+    ${chk('rx-disabled', r.disabled, 'Disabled')}
+    ${chk('rx-edit', r.runOnEdit, 'Run on edit', 'Also runs when you edit a message')}
+    <label class="field"><span class="label">Macros in find regex</span><select id="rx-subst">
+      ${[[0, "Don't substitute"], [1, 'Substitute (raw)'], [2, 'Substitute (escaped)']].map(([v, l]) => `<option value="${v}" ${r.substituteRegex === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select></label>
+    <h4 class="sub">Ephemerality</h4>
+    <p class="hint">With both off, the script changes the saved message itself.</p>
+    ${chk('rx-md', r.markdownOnly, 'Alter chat display', 'Changes how messages look on screen; the AI still sees the original')}
+    ${chk('rx-prompt', r.promptOnly, 'Alter outgoing prompt', 'Changes what is sent to the AI; the screen shows the original')}
     <div class="row wrap">
-      <label class="field grow"><span class="label">Min depth</span><input id="rx-min" inputmode="numeric" value="${r.minDepth ?? ''}" placeholder="any"></label>
-      <label class="field grow"><span class="label">Max depth</span><input id="rx-max" inputmode="numeric" value="${r.maxDepth ?? ''}" placeholder="any"></label>
+      <label class="field grow"><span class="label">Min depth</span><input id="rx-min" inputmode="numeric" value="${r.minDepth ?? ''}" placeholder="Unlimited"></label>
+      <label class="field grow"><span class="label">Max depth</span><input id="rx-max" inputmode="numeric" value="${r.maxDepth ?? ''}" placeholder="Unlimited"></label>
     </div>
     <div class="row wrap">
       ${i !== -1 ? `<button class="btn" data-action="rx-export" data-i="${i}">${ICONS.download} Export</button><button class="btn danger" data-action="rx-delete" data-i="${i}">${ICONS.trash} Delete</button>` : ''}
     </div>
     <button class="btn primary block" data-action="rx-save" data-i="${i}">Save</button>
   `, 'tall');
+}
+
+/** The script as currently filled in on the editor sheet. */
+function rxFromForm(base) {
+  return normalizeScript({
+    ...base,
+    scriptName: $('#rx-name').value.trim() || 'Regex',
+    findRegex: $('#rx-find').value,
+    replaceString: $('#rx-replace').value,
+    trimStrings: $('#rx-trim').value.split('\n').filter((x) => x !== ''),
+    placement: [...document.querySelectorAll('[data-rx-place]')].filter((x) => x.checked).map((x) => +x.dataset.rxPlace),
+    disabled: $('#rx-disabled').checked,
+    markdownOnly: $('#rx-md').checked,
+    promptOnly: $('#rx-prompt').checked,
+    runOnEdit: $('#rx-edit').checked,
+    substituteRegex: Number($('#rx-subst').value) || 0,
+    minDepth: numOrNull($('#rx-min').value),
+    maxDepth: numOrNull($('#rx-max').value),
+  });
+}
+
+function updateRxTest() {
+  const out = $('#rx-test-out');
+  const inp = $('#rx-test-in');
+  if (!out || !inp) return;
+  if (!inp.value) { out.textContent = ''; return; }
+  try {
+    const sc = rxFromForm({});
+    if (!regexFromString(sc.findRegex)) { out.textContent = 'That find regex isn\'t valid.'; return; }
+    const env = { char: S.char ? S.char.name : 'Char', user: activePersona().name, vars: {} };
+    out.textContent = runRegexScript(sc, inp.value, (t) => evaluateMacros(t, env));
+  } catch (e) { out.textContent = e.message; }
 }
 
 function qrById(id) {
@@ -4221,19 +4274,7 @@ const actions = {
   'rx-save': (el) => {
     const i = +el.dataset.i;
     const base = i === -1 ? normalizeScript({ findRegex: '' }) : S.regex[i];
-    const r = normalizeScript({
-      ...base,
-      scriptName: $('#rx-name').value.trim() || 'Regex',
-      findRegex: $('#rx-find').value,
-      replaceString: $('#rx-replace').value,
-      trimStrings: $('#rx-trim').value.split('\n').filter((x) => x !== ''),
-      placement: [...document.querySelectorAll('[data-rx-place]')].filter((x) => x.checked).map((x) => +x.dataset.rxPlace),
-      markdownOnly: $('#rx-md').checked,
-      promptOnly: $('#rx-prompt').checked,
-      runOnEdit: $('#rx-edit').checked,
-      minDepth: numOrNull($('#rx-min').value),
-      maxDepth: numOrNull($('#rx-max').value),
-    });
+    const r = rxFromForm(base);
     if (i === -1) S.regex.push(r); else S.regex[i] = r;
     saveRegex(); closeSheet(); rerenderSettings();
   },
@@ -4325,6 +4366,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.closest && el.closest('.sheet') && document.getElementById('rx-test-out')) updateRxTest();
   if ('secret' in el.dataset) return; // keys are saved on change (when you finish), never half-typed
   if (el.dataset.bind && el.tagName !== 'SELECT' && el.type !== 'checkbox') {
     let v = el.value;

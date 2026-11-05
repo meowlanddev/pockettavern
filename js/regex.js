@@ -1,6 +1,6 @@
 // SillyTavern-compatible regex scripts.
 export const PLACEMENT = { USER: 1, AI: 2, SLASH: 3, WORLD_INFO: 5, REASONING: 6 };
-export const PLACEMENT_LABELS = { 1: 'User input', 2: 'AI output', 5: 'World info', 6: 'Reasoning' };
+export const PLACEMENT_LABELS = { 1: 'User input', 2: 'AI output', 3: 'Slash commands', 5: 'World info', 6: 'Reasoning' };
 
 export function regexFromString(str) {
   if (!str) return null;
@@ -61,9 +61,10 @@ export function applyRegex(text, scripts, { placement, isMarkdown = false, isPro
   if (!text || !scripts || !scripts.length) return text;
   for (const s of scripts) {
     if (!s || s.disabled || !s.placement.includes(placement)) continue;
-    const ok = s.markdownOnly ? isMarkdown
-      : s.promptOnly ? isPrompt
-        : (!isMarkdown && (!isPrompt || placement === PLACEMENT.WORLD_INFO));
+    // Like SillyTavern: "Alter chat display" and "Alter outgoing prompt" can both be on.
+    const ok = (s.markdownOnly || s.promptOnly)
+      ? (s.markdownOnly && isMarkdown) || (s.promptOnly && isPrompt)
+      : (!isMarkdown && (!isPrompt || placement === PLACEMENT.WORLD_INFO));
     if (!ok) continue;
     if (depth !== null && depth !== undefined) {
       if (s.minDepth !== null && s.minDepth >= 0 && depth < s.minDepth) continue;
