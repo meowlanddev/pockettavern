@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.8';
+const VERSION = '1.9.9';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -1367,6 +1367,80 @@ async function importFromLink(link) {
 const looksRegex = (j) => (Array.isArray(j) ? j.length && j.every((x) => x && typeof x.findRegex === 'string')
   : !!j && (typeof j.findRegex === 'string' || Array.isArray(j.regex_scripts)));
 
+// ---------- personas: import / export ----------
+const PERSONA_MARK = 'pocketTavernPersona';
+const isPersonaCard = (card) => !!(card && card.extensions && card.extensions[PERSONA_MARK]);
+const isStPersonaBackup = (j) => !!(j && typeof j === 'object' && !Array.isArray(j) && j.personas && typeof j.personas === 'object' && !Array.isArray(j.personas) && (j.persona_descriptions || j.default_persona !== undefined));
+
+/** Personas from one file: a persona/character card (.png/.json), a SillyTavern persona backup, or our own export. */
+async function personasFromFile(f) {
+  const buf = await f.arrayBuffer();
+  if (isPng(buf)) {
+    const { card, avatarBlob } = await parseCardFile(new File([buf], f.name, { type: 'image/png' }));
+    return [{ name: card.name, description: card.description || '', avatar: avatarBlob ? await blobToAvatar(avatarBlob, 256) : null }];
+  }
+  let j;
+  try { j = JSON.parse(new TextDecoder().decode(buf)); } catch { throw new Error(`${f.name}: not a persona, card or JSON file`); }
+  if (isStPersonaBackup(j)) {
+    const descs = j.persona_descriptions || {};
+    return Object.entries(j.personas).map(([file, name]) => ({ name: String(name || baseName(file)), description: String((descs[file] || {}).description || ''), avatar: null, isDefault: file === j.default_persona }));
+  }
+  if (j && j.app === 'PocketTavern' && Array.isArray(j.personas)) {
+    return j.personas.map((x) => ({ name: String(x.name || 'Persona'), description: String(x.description || ''), avatar: safeAvatar(x.avatar) }));
+  }
+  const { card } = await parseCardFile(new File([buf], f.name, { type: 'application/json' }));
+  return [{ name: card.name, description: card.description || '', avatar: null }];
+}
+
+function addPersonas(list) {
+  let added = 0, skipped = 0, last = null, def = null;
+  // A brand-new app only has the blank "User" placeholder: replace it, like the zip import does.
+  const ps = S.settings.personas;
+  const placeholder = ps.length === 1 && ps[0].name === 'User' && !ps[0].description && !ps[0].avatar && !(ps[0].lorebooks || []).length ? ps[0] : null;
+  for (const x of list) {
+    const name = String(x.name || '').trim() || 'Persona';
+    if (S.settings.personas.some((p) => p.name === name && (p.description || '') === (x.description || ''))) { skipped++; continue; }
+    const p = { id: db.uid(), name, description: x.description || '', avatar: x.avatar ? safeAvatar(x.avatar) : null };
+    S.settings.personas.push(p);
+    last = p; added++;
+    if (x.isDefault) def = p;
+  }
+  if (added && placeholder) {
+    S.settings.personas = S.settings.personas.filter((x) => x !== placeholder);
+    if (S.settings.activePersona === placeholder.id) S.settings.activePersona = (def || last).id;
+  }
+  if (def) S.settings.activePersona = def.id;
+  return { added, skipped, last, def };
+}
+
+async function importPersonas() {
+  const files = await pickFile('file-cards');
+  if (!files.length) return;
+  const all = [];
+  const errs = [];
+  for (const f of files) { try { all.push(...await personasFromFile(f)); } catch (e) { errs.push(e.message); } }
+  const { added, skipped, last } = addPersonas(all);
+  if (added === 1) S.settings.activePersona = last.id;
+  saveSettings(true);
+  rerenderSettings();
+  toast([
+    added ? `Imported ${added} persona${added === 1 ? '' : 's'}${added === 1 ? ` — “${last.name}” is now active` : ' — pick one under Active persona'}.` : '',
+    skipped ? `${skipped} already here.` : '',
+    !added && !skipped && !errs.length ? 'No personas found in that file.' : '',
+    errs.join(' '),
+  ].filter(Boolean).join(' '), errs.length ? 8000 : 4000);
+}
+
+async function exportPersona() {
+  const p = activePersona();
+  const card = {
+    name: p.name, description: p.description || '', personality: '', scenario: '', first_mes: '', mes_example: '',
+    creator_notes: 'A persona exported from PocketTavern. Import it with Import persona (PocketTavern), or use it as a character card.',
+    tags: ['persona'], avatar: p.avatar, extensions: { [PERSONA_MARK]: true },
+  };
+  await saveFile(await exportCardPng(card), `${safeName(p.name)} (persona).png`);
+}
+
 /** Import anything SillyTavern exports: character cards, presets, lorebooks, regex scripts. */
 async function importFiles() {
   const files = await pickFile('file-cards');
@@ -1379,6 +1453,26 @@ async function importFiles() {
       await importStZip(f);
       continue;
     }
+    // Personas: a SillyTavern persona backup, our own export, or a card marked as a persona.
+    try {
+      const head = new Uint8Array(await f.slice(0, 1).arrayBuffer())[0];
+      let personaList = null;
+      if (head === 0x7b) {
+        const j = JSON.parse(await f.text());
+        if (isStPersonaBackup(j) || (j && j.app === 'PocketTavern' && Array.isArray(j.personas))) personaList = await personasFromFile(f);
+        else if (isPersonaCard(j.data || j)) personaList = await personasFromFile(f);
+      } else if (head === 0x89) {
+        const { card } = await parseCardFile(f);
+        if (isPersonaCard(card)) personaList = await personasFromFile(f);
+      }
+      if (personaList) {
+        const r = addPersonas(personaList);
+        if (r.added === 1) S.settings.activePersona = r.last.id;
+        saveSettings(true);
+        toast(r.added ? `Imported ${r.added} persona${r.added === 1 ? '' : 's'} (Settings → Persona).` : 'That persona is already here.');
+        continue;
+      }
+    } catch { /* not a persona — handled below as a card, preset, lorebook… */ }
     try {
       const buf = await f.arrayBuffer();
       const base = f.name.replace(/\.[^.]+$/, '');
@@ -2983,7 +3077,12 @@ function renderSettingsView(open) {
     <div class="field"><span class="label">Lorebooks for this persona</span>
       ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
     </div>
-    ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}`;
+    <div class="row wrap">
+      <button class="btn sm" data-action="persona-import">${ICONS.import} Import persona</button>
+      <button class="btn sm" data-action="persona-export">${ICONS.download} Export persona</button>
+      ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}
+    </div>
+    <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself. Export saves this persona as a card others can import.</p>`;
 
   const en = S.settings.ext.enhance;
   const mm = S.settings.ext.memory;
@@ -4333,6 +4432,8 @@ const actions = {
     rerenderSettings();
   },
   'backup-export': exportBackup,
+  'persona-import': importPersonas,
+  'persona-export': exportPersona,
   'secret-clear': (el) => {
     if (!confirm('Remove this saved key?')) return;
     const p = el.dataset.path;
