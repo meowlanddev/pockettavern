@@ -61,3 +61,9 @@ for (const shorthand of [
 ]) {
   assert.throws(() => mk('**Bruce Wayne**\n' + shorthand, '- Retrieve Leesie tomorrow.'), /incomplete-memory placeholder/, shorthand);
 }
+
+// A timeline label can be renamed while its history remains intact.
+const origin = mk('**Catrin**\n- Waiting.', '', '- **Origin-timeline context:** Leviathan crew fate unknown.');
+const renamed = mk('**Catrin**\n- Waiting.', '', '- **Abandoned timeline:** Leviathan crew fate unknown.');
+assert.deepEqual(DB.continuityWarnings(origin, renamed), [], 'timeline rename is not memory loss');
+assert(DB.continuityWarnings(origin, mk('**Catrin**\n- Waiting.', '', 'Unrelated scene.')).some(x => x.includes('timeline branch')), 'missing timeline still warns');
