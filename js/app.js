@@ -2857,18 +2857,22 @@ function setPath(path, value) {
 }
 
 /** Settings for the built-in versions of ST's bundled extensions. Inputs use data-x="group.key". */
+function extensionPanel(id, name, on, body) {
+  return `<details class="ext-panel" data-ext-panel="${id}"><summary><span>${name}</span><span class="ext-state ${on ? 'is-on' : 'is-off'}">${on ? 'On' : 'Off'}</span></summary><div class="ext-panel-body">${body}</div></details>`;
+}
+function extensionCategory(id, name, items, body) {
+  const enabled = items.filter(Boolean).length;
+  return `<details class="ext-category" data-ext-category="${id}"><summary><span>${name}</span><span class="ext-count">${enabled} of ${items.length} on</span></summary><div class="ext-category-body">${body}</div></details>`;
+}
 function extSections() {
   const e = S.settings.ext;
   const tog = (path, label, hint = '') => { const [g, k] = path.split('.'); return `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" data-x-toggle="${path}" ${e[g][k] ? 'checked' : ''}><i></i></label>`; };
   const txt = (path, label, hint = '', type = 'text', ph = '') => { const [g, k] = path.split('.'); return `<label class="field"><span class="label">${label}${hint ? ` <span class="hint">${hint}</span>` : ''}</span><span class="row"><input ${type === 'password' ? 'type="password" data-secret' : 'type="text"'} data-x="${path}" ${type === 'password' ? '' : `value="${esc(e[g][k] ?? '')}"`} placeholder="${esc(type === 'password' ? secretHint(e[g][k], ph) : ph)}" autocomplete="off" autocapitalize="off" spellcheck="false">${type === 'password' && e[g][k] ? `<button class="btn sm" data-action="secret-clear" data-path="ext.${path}">Remove</button>` : ''}</span></label>`; };
   const sel = (path, label, opts) => { const [g, k] = path.split('.'); return `<label class="field inline"><span class="label">${label}</span><select data-x-select="${path}">${Object.entries(opts).map(([v, l]) => `<option value="${v}" ${String(e[g][k]) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`; };
-  return `
-    <h4 class="sub">📷 Images in chat</h4>
-    ${tog('vision.enabled', 'Attach photos', 'Adds a 🖼 button by the message box; photos go to vision models')}
-    ${e.vision.enabled ? txt('vision.maxImages', 'Images sent per request', '(newest first)') : ''}
-
-    <h4 class="sub">🎨 Image generation</h4>
-    ${tog('image.enabled', 'Enabled', '✨ → Generate image, or /imagine scene | char | me | your description')}
+  return {
+    vision: `    ${tog('vision.enabled', 'Attach photos', 'Adds a 🖼 button by the message box; photos go to vision models')}
+    ${e.vision.enabled ? txt('vision.maxImages', 'Images sent per request', '(newest first)') : ''}`,
+    image: `    ${tog('image.enabled', 'Enabled', '✨ → Generate image, or /imagine scene | char | me | your description')}
     ${e.image.enabled ? `
       ${sel('image.provider', 'Service', { openrouter: 'OpenRouter (image models)', openai: 'OpenAI-compatible', pollinations: 'Pollinations (free, no key)' })}
       ${e.image.provider !== 'pollinations' ? txt('image.model', 'Model', '', 'text', e.image.provider === 'openrouter' ? 'google/gemini-2.5-flash-image' : 'gpt-image-1') : ''}
@@ -2877,10 +2881,8 @@ function extSections() {
       ${sel('image.aspect', 'Shape', { '1:1': 'Square', '2:3': 'Portrait', '3:2': 'Landscape', '9:16': 'Tall', '16:9': 'Wide' })}
       ${txt('image.style', 'Style', '(added to every prompt)', 'text', 'e.g. anime, soft lighting, detailed')}
       ${txt('image.negative', 'Avoid', '', 'text', 'e.g. text, watermark, extra fingers')}
-      ${tog('image.writePrompt', 'Let the AI polish custom descriptions')}` : ''}
-
-    <h4 class="sub">🔊 Text-to-speech</h4>
-    ${tog('tts.enabled', 'Enabled', 'Adds “Speak” to messages')}
+      ${tog('image.writePrompt', 'Let the AI polish custom descriptions')}` : ''}`,
+    tts: `    ${tog('tts.enabled', 'Enabled', 'Adds “Speak” to messages')}
     ${e.tts.enabled ? `
       ${sel('tts.provider', 'Voices', { browser: 'Built-in (free, on device)', openai: 'OpenAI-compatible', elevenlabs: 'ElevenLabs' })}
       ${e.tts.provider === 'openai' ? txt('tts.baseUrl', 'Base URL', '', 'text', 'https://api.openai.com/v1') + txt('tts.model', 'Model', '', 'text', 'gpt-4o-mini-tts') : ''}
@@ -2893,34 +2895,28 @@ function extSections() {
       ${tog('tts.dialogueOnly', 'Only read "dialogue"')}
       ${tog('tts.skipActions', 'Skip *actions*')}
       <button class="btn sm" data-action="tts-test">Test voice</button>
-      <p class="hint">Give each character their own voice in Edit character.</p>` : ''}
-
-    <h4 class="sub">🌐 Translation</h4>
-    ${tog('translate.enabled', 'Enabled', 'Uses your chat model (or the one below); adds “Translate” to messages')}
+      <p class="hint">Give each character their own voice in Edit character.</p>` : ''}`,
+    translate: `    ${tog('translate.enabled', 'Enabled', 'Uses your chat model (or the one below); adds “Translate” to messages')}
     ${e.translate.enabled ? `
       ${txt('translate.target', 'Translate replies into', '', 'text', 'English')}
       ${tog('translate.auto', 'Translate new replies automatically', 'The AI still sees the original')}
       ${tog('translate.input', 'Translate my messages before sending')}
       ${e.translate.input ? txt('translate.inputTarget', 'Send my messages in', '', 'text', 'English') : ''}
-      ${txt('translate.model', 'Model', '(optional; blank = chat model)')}` : ''}
-
-    <h4 class="sub">🎭 Character expressions</h4>
-    ${tog('expressions.enabled', 'Enabled', 'Shows the speaker’s sprite above the chat, matched to the mood of the reply')}
+      ${txt('translate.model', 'Model', '(optional; blank = chat model)')}` : ''}`,
+    expressions: `    ${tog('expressions.enabled', 'Enabled', 'Shows the speaker’s sprite above the chat, matched to the mood of the reply')}
     ${e.expressions.enabled ? `
       ${tog('expressions.auto', 'Detect the mood after each reply', 'One tiny extra request per reply')}
       ${txt('expressions.model', 'Model', '(optional; a cheap fast one is ideal)')}
-      <p class="hint">Add sprites in Edit character (files named joy.png, anger.png, neutral.png…) — they also come over from a SillyTavern zip. Tap the sprite to shrink it.</p>` : ''}
-
-    <h4 class="sub">🔎 Chat recall <span class="muted small">(Vector Storage)</span></h4>
-    ${tog('recall.enabled', 'Enabled', 'Brings relevant older moments back into the prompt')}
+      <p class="hint">Add sprites in Edit character (files named joy.png, anger.png, neutral.png…) — they also come over from a SillyTavern zip. Tap the sprite to shrink it.</p>` : ''}`,
+    recall: `    ${tog('recall.enabled', 'Enabled', 'Brings relevant older moments back into the prompt')}
     ${e.recall.enabled ? `
       ${sel('recall.mode', 'Matching', { keyword: 'Keywords (free, on device)', embeddings: 'Embeddings (OpenAI-compatible)' })}
       ${e.recall.mode === 'embeddings' ? txt('recall.embBase', 'Embeddings URL', '', 'text', 'https://api.openai.com/v1') + txt('recall.embModel', 'Embeddings model', '', 'text', 'text-embedding-3-small') + txt('recall.embKey', 'API key', '', 'password') : ''}
       ${txt('recall.topK', 'Moments to recall')}
       ${txt('recall.skipRecent', 'Ignore the last N messages', '(they are already in the prompt)')}
       ${txt('recall.depth', 'Insert at depth')}
-      ${txt('recall.minScore', 'Minimum match', '(0–1)')}` : ''}
-    <hr class="sep">`;
+      ${txt('recall.minScore', 'Minimum match', '(0–1)')}` : ''}`,
+  };
 }
 
 function renderSettingsView(open) {
@@ -3124,14 +3120,11 @@ function renderSettingsView(open) {
     <p class="hint">Imports SillyTavern UI themes and Moonlit Echoes presets (e.g. “[Moonlit] Glimmer”). Exports load in SillyTavern too. Chat styles also switch with /echostyle, /whisperstyle… or /chatstyle name.</p>`;
   const sm = S.settings.ext.summarize;
   const tog = (attr, key, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" ${attr}="${key}" ${on ? 'checked' : ''}><i></i></label>`;
+  const extra = extSections();
   const extBody = `
-    <h4 class="sub">✨ Enhance My Reply</h4>
-    ${tog('data-ext-enhance-toggle', 'enabled', en.enabled, 'Enabled', 'Shows ✨ next to the message box when you have a draft')}
-    <label class="field"><span class="label">Enhancement prompt</span><textarea data-ext-enhance="prompt" rows="6">${esc(en.prompt)}</textarea></label>
-    <button class="btn sm" data-action="enhance-reset">Reset prompt</button>
-    ${ENHANCE_TOGGLES.map(([k, label, hint]) => tog('data-ext-enhance-toggle', k, en[k], label, hint)).join('')}
-    <p class="hint">Uses the chat context plus your current connection, model, preset and generation settings. The result replaces your draft but isn't sent.</p>
-    <h4 class="sub">📝 Summarize</h4>
+    ${extensionCategory("memory", "🧠 Summarization & Memory", [sm.enabled, mm.enabled, S.settings.ext.recall.enabled], `
+      ${extensionPanel("summarize", "Summarize", sm.enabled, `
+
     ${tog('data-ext-sum-toggle', 'enabled', sm.enabled, 'Enabled', 'Keeps a running summary of each chat and adds it to the prompt')}
     <label class="field inline"><span class="label">Update every<span class="hint">messages</span></span><input inputmode="numeric" data-ext-sum="every" value="${sm.every}"></label>
     <label class="field inline"><span class="label">Summary length<span class="hint">words</span></span><input inputmode="numeric" data-ext-sum="words" value="${sm.words}"></label>
@@ -3142,8 +3135,10 @@ function renderSettingsView(open) {
     <label class="field"><span class="label">Injection template</span><input data-ext-sum="template" value="${esc(sm.template)}"></label>
     <label class="field"><span class="label">Summary prompt</span><textarea data-ext-sum="prompt" rows="5">${esc(sm.prompt)}</textarea></label>
     <p class="hint">Edit or refresh a chat's summary from ✨ → Summary. Your preset can use it anywhere with {{summary}}.</p>
-    ${extSections()}
-    <h4 class="sub">🧠 Layered memory <span class="muted small">(Summaryception)</span></h4>
+    
+      `)}
+      ${extensionPanel("summaryception", "Summaryception (Layered Memory)", mm.enabled, `
+
     ${tog('data-ext-mem-toggle', 'enabled', mm.enabled, 'Enabled', 'Recent chat stays word-for-word; older chat becomes layered memories and is “ghosted” (still visible to you, not sent)')}
     <label class="field inline"><span class="label">Memory mode</span><select data-ext-mem-select="mode">
       ${Object.entries(MEM.MEMORY_MODES).map(([k, v]) => `<option value="${k}" ${mm.mode === k ? 'selected' : ''}>${v.label}${v.verbatim ? ` (${v.verbatim / 1000}k + ${v.queued / 1000}k)` : ''}</option>`).join('')}
@@ -3166,7 +3161,33 @@ function renderSettingsView(open) {
       <button class="btn sm" data-action="mem-reset-prompts">Reset prompts</button>
     </div></details>
     <p class="hint">Manage a chat's memory from ✨ → Memory, or with /sc-status, /sc-preview, /sc-clear.</p>
-    <p class="hint">Other SillyTavern extensions can't be installed directly (they run code inside SillyTavern itself), but popular ones can be rebuilt here — ask!</p>`;
+
+      `)}
+      ${extensionPanel("recall", "Chat Recall (Vector Storage)", S.settings.ext.recall.enabled, extra.recall)}
+      <p class="hint">Narrative Database will join this group when we merge the feature branch.</p>
+    `)}
+    ${extensionCategory("writing", "✍️ Writing & Language", [en.enabled, S.settings.ext.translate.enabled], `
+      ${extensionPanel("enhance", "Enhance My Reply", en.enabled, `
+
+    ${tog('data-ext-enhance-toggle', 'enabled', en.enabled, 'Enabled', 'Shows ✨ next to the message box when you have a draft')}
+    <label class="field"><span class="label">Enhancement prompt</span><textarea data-ext-enhance="prompt" rows="6">${esc(en.prompt)}</textarea></label>
+    <button class="btn sm" data-action="enhance-reset">Reset prompt</button>
+    ${ENHANCE_TOGGLES.map(([k, label, hint]) => tog('data-ext-enhance-toggle', k, en[k], label, hint)).join('')}
+    <p class="hint">Uses the chat context plus your current connection, model, preset and generation settings. The result replaces your draft but isn't sent.</p>
+    
+      `)}
+      ${extensionPanel("translate", "Translation", S.settings.ext.translate.enabled, extra.translate)}
+    `)}
+    ${extensionCategory("visuals", "🎨 Images & Visuals", [S.settings.ext.vision.enabled, S.settings.ext.image.enabled, S.settings.ext.expressions.enabled], `
+      ${extensionPanel("vision", "Images in Chat (Vision)", S.settings.ext.vision.enabled, extra.vision)}
+      ${extensionPanel("image", "Image Generation", S.settings.ext.image.enabled, extra.image)}
+      ${extensionPanel("expressions", "Character Expressions", S.settings.ext.expressions.enabled, extra.expressions)}
+    `)}
+    ${extensionCategory("audio", "🔊 Audio & Speech", [S.settings.ext.tts.enabled], `
+      ${extensionPanel("tts", "Text-to-Speech", S.settings.ext.tts.enabled, extra.tts)}
+    `)}
+    <p class="hint">Other SillyTavern extensions cannot be installed directly; supported functionality is built into PocketTavern.</p>
+  `;
 
   const qrBody = `
     ${S.qr.map((q) => `<div class="list-row">
@@ -3234,9 +3255,13 @@ function renderSettingsView(open) {
 
 function rerenderSettings() {
   const open = [...document.querySelectorAll('details.section[open]')].map((d) => d.dataset.sec)[0];
+  const expandedGroups = [...document.querySelectorAll('details.ext-category[open]')].map(d => d.dataset.extCategory);
+  const expandedPanels = [...document.querySelectorAll('details.ext-panel[open]')].map(d => d.dataset.extPanel);
   const scroll = $('main.scroll')?.scrollTop || 0;
   renderSettingsView(open);
   document.querySelectorAll('details.section').forEach((d) => { if (d.dataset.sec === open) d.open = true; });
+  document.querySelectorAll('details.ext-category').forEach(d => { d.open = expandedGroups.includes(d.dataset.extCategory); });
+  document.querySelectorAll('details.ext-panel').forEach(d => { d.open = expandedPanels.includes(d.dataset.extPanel); });
   const m = $('main.scroll');
   if (m) m.scrollTop = scroll;
 }
