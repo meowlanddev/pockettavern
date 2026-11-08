@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.8)';
+const VERSION = '1.9.9.0 (0.9)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -644,7 +644,23 @@ function updateDatabaseBanner() {
   if (!banner) return;
   const progress = S.dbProgress && S.chat && S.dbProgress.chatId === S.chat.id ? S.dbProgress : null;
   banner.hidden = !progress;
-  if (progress) banner.textContent = '📚 Narrative Database: ' + progress.message.toLowerCase() + '… (' + Math.min(progress.done + 1, progress.total) + '/' + progress.total + ' batches)' + (progress.lastSeconds != null ? ' · last batch ' + progress.lastSeconds + 's' : '') + databaseEstimate(progress) + '. This might take a while…';
+  if (!progress) return;
+  const total = Math.max(1, progress.total);
+  const done = Math.min(total, Math.max(0, progress.done));
+  const percent = Math.round(done / total * 100);
+  const currentBatch = Math.min(done + 1, total);
+  banner.innerHTML = `
+    <div class="ndb-progress-head">
+      <span>📚 Narrative Database: ${esc(progress.message.toLowerCase())}…</span>
+      <span class="ndb-current-batch">Batch ${currentBatch} of ${total} · processing</span>
+    </div>
+    <div class="ndb-progress-track" role="progressbar" aria-label="Narrative Database batches completed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+      <div class="ndb-progress-fill" style="width:${percent}%"></div>
+    </div>
+    <div class="ndb-progress-foot">
+      <span>${done} / ${total} complete · ${percent}%</span>
+      <span>${progress.lastSeconds != null ? 'Last batch: ' + databaseDuration(progress.lastSeconds) : 'This might take a while…'}${databaseEstimate(progress)}</span>
+    </div>`;
 }
 function databaseSheet() {
   const chat = S.chat;
@@ -2235,7 +2251,7 @@ async function renderChatView(charId, chatId) {
       </button>
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
     </header>
-    <div id="ndb-running-banner" role="status" aria-live="polite" style="padding:8px 12px;text-align:center;background:var(--bg2,rgba(128,128,128,.18));font-size:.85em" hidden></div>
+    <div id="ndb-running-banner" class="ndb-running-banner" role="status" aria-live="polite" hidden></div>
     <div id="sheld">
       <div id="expr-panel" class="expr-panel" data-action="expr-toggle" hidden></div>
       <main class="scroll messages" id="chat"></main>
