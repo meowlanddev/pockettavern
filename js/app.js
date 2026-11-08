@@ -783,14 +783,22 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
           const repairInput = input + '\n\n<database_repair>\nThe previous replacement was rejected: ' + String(validationError.message || validationError).slice(0, 500) + '\nReturn a FULL standalone database with every required section. Replace shorthand such as "unchanged", "no change; see Chronicle", and "same as before" with concrete facts from the previous database. Do not omit prior facts merely because they were not mentioned in the new messages.\n</database_repair>';
           result = validate(await memCall(system, repairInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
         }
-        // 0.22: retry once when the replacement appears to lose protected continuity.
-        // Do not advance coverage or overwrite the checkpoint on a failed retry.
-        let continuity = NDB.continuityWarnings(working.text, result, batch.messages);
+        // Continuity heuristics are advisory: headings, deadlines and task
+        // wording may change legitimately. Request one repair, but never
+        // reject a structurally valid checkpoint solely on heuristic flags.
+        const continuity = NDB.continuityWarnings(working.text, result, batch.messages);
         if (continuity.length) {
-          const retryInput = input + '\n\n<continuity_review>\nThe previous draft may have lost important established continuity. Check these items against the original messages and previous database; preserve accurate facts, but honor explicit corrections and genuine resolutions. Return the entire corrected database, not a patch:\n- ' + continuity.join('\n- ') + '\n</continuity_review>';
-          result = validate(await memCall(system, retryInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
-          continuity = NDB.continuityWarnings(working.text, result, batch.messages);
-          if (continuity.length) throw new Error('Continuity review still flags possible omissions: ' + continuity.join('; ').slice(0, 700) + '. Previous checkpoint retained; review or retry.');
+          const retryInput = input + '\n\n<continuity_review>\nPlease verify these possible omissions against the original messages and previous database. Preserve the facts if still true; record completions, changes, and uncertainty accurately. Return the FULL corrected database, not a patch:\n- ' + continuity.join('\n- ') + '\n</continuity_review>';
+          try {
+            const repaired = validate(await memCall(system, retryInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+            result = repaired;
+          } catch (reviewError) {
+            // First draft already passed structural validation. Keep it
+            // instead of blocking the rebuild on an optional review.
+            console.warn('Narrative Database continuity review failed; retaining structurally valid draft:', reviewError);
+          }
+          const remaining = NDB.continuityWarnings(working.text, result, batch.messages);
+          if (remaining.length) console.warn('Narrative Database possible continuity omissions (non-blocking):', remaining);
         }
       } catch (err) {
         throw new Error(`Messages ${working.covered + 1}–${batch.end}: ${err.message || err}`);
