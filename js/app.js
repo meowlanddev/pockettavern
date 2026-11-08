@@ -2787,9 +2787,35 @@ function viewPrompt() {
   `, 'tall');
 }
 
-function exportChat() {
+// Portable content fingerprint. Message IDs are regenerated on JSONL import, so
+// Narrative Database checkpoints cannot use their old ID-based signatures.
+function portableChatFingerprint(messages) {
+  let hash = 2166136261;
+  const mix = value => {
+    for (const char of String(value)) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+  };
+  for (const m of messages) {
+    mix(m.role); mix('|'); mix(m.hidden ? '1' : '0'); mix('|');
+    mix(JSON.stringify(m.swipes || [])); mix('|'); mix(m.swipeIdx || 0); mix('\n');
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function exportChat(includeMemory = false) {
   const persona = activePersona();
-  const lines = [JSON.stringify({ user_name: persona.name, character_name: S.char.name, create_date: new Date(S.chat.createdAt).toISOString(), chat_metadata: {} })];
+  const metadata = {};
+  if (includeMemory) {
+    const chat = S.chat;
+    metadata.pockettavern_memory = {
+      version: 1,
+      messageCount: chat.messages.length,
+      messageFingerprint: portableChatFingerprint(chat.messages),
+      ...(chat.narrativeDb?.text ? { narrativeDb: structuredClone(chat.narrativeDb) } : {}),
+      ...(chat.summary?.text ? { summary: structuredClone(chat.summary) } : {}),
+      ...(chat.authorsNote?.text ? { authorsNote: structuredClone(chat.authorsNote) } : {}),
+    };
+  }
+  const lines = [JSON.stringify({ user_name: persona.name, character_name: S.char.name, create_date: new Date(S.chat.createdAt).toISOString(), chat_metadata: metadata })];
   for (const m of S.chat.messages) {
     const isUser = m.role === 'user';
     lines.push(JSON.stringify({
@@ -2802,19 +2828,69 @@ function exportChat() {
       ...(isUser ? {} : { swipes: m.swipes, swipe_id: m.swipeIdx }),
     }));
   }
-  saveFile(new Blob([lines.join('\n')], { type: 'application/jsonl' }), `${safeName(S.char.name)} - ${safeName(S.chat.title)}.jsonl`);
+  const suffix = includeMemory ? ' - with memory' : '';
+  saveFile(new Blob([lines.join('\n')], { type: 'application/jsonl' }), `${safeName(S.char.name)} - ${safeName(S.chat.title)}${suffix}.jsonl`);
+}
+
+function exportChatChoice() {
+  if (!S.chat?.narrativeDb?.text) return exportChat();
+  openSheet(`
+    <div class="sheet-title">Export Chat</div>
+    <p class="hint">Choose a standard SillyTavern-compatible chat file, or include the saved Narrative Database and running summary for restoration in PocketTavern.</p>
+    <div class="row wrap">
+      <button class="btn" data-action="export-chat-standard">Export Chat</button>
+      <button class="btn primary" data-action="export-chat-memory">Export with Summary Data</button>
+    </div>
+    <p class="hint">Both files use JSONL. Other apps may ignore the extra PocketTavern metadata.</p>
+  `);
+}
+
+function restoreExportedChatMemory(chat, md) {
+  const bundle = md?.pockettavern_memory;
+  if (!bundle || bundle.version !== 1) return false;
+  // Only restore checkpoints if the exported message contents and order survived.
+  if (bundle.messageCount !== chat.messages.length ||
+      bundle.messageFingerprint !== portableChatFingerprint(chat.messages)) return false;
+  const src = bundle.narrativeDb;
+  if (src && typeof src.text === 'string' && src.text.trim()) {
+    const covered = Number(src.covered);
+    if (Number.isInteger(covered) && covered >= 0 && covered <= chat.messages.length) {
+      const checkpoints = Array.isArray(src.checkpoints) ? src.checkpoints
+        .filter(c => c && typeof c.text === 'string' && Number.isInteger(c.covered) && c.covered >= 0 && c.covered <= covered)
+        .slice(-20).map(c => ({...c, signature: NDB.fingerprint(chat.messages, c.covered)})) : [];
+      chat.narrativeDb = {
+        text: src.text, covered, checkpoints,
+        signature: NDB.fingerprint(chat.messages, covered),
+        at: Number(src.at) || Date.now(),
+      };
+    }
+  }
+  const summary = bundle.summary;
+  if (summary && typeof summary.text === 'string' && summary.text.trim()) {
+    chat.summary = {text: summary.text, upTo: Number.isInteger(summary.upTo)
+      ? Math.max(0, Math.min(summary.upTo, chat.messages.length)) : chat.messages.length, at: Number(summary.at) || Date.now()};
+  }
+  if (bundle.authorsNote && typeof bundle.authorsNote.text === 'string') {
+    chat.authorsNote = {
+      text: bundle.authorsNote.text,
+      depth: Number(bundle.authorsNote.depth) || 4,
+      role: ['system','assistant','user'].includes(bundle.authorsNote.role) ? bundle.authorsNote.role : 'system',
+    };
+  }
+  return !!(chat.narrativeDb || chat.summary);
 }
 
 async function importChat() {
   const [file] = await pickFile('file-chat');
   if (!file) return;
   try {
-    const { messages: msgs } = parseStChat(await file.text(), { uid: db.uid });
+    const { messages: msgs, meta } = parseStChat(await file.text(), { uid: db.uid });
     if (!msgs.length) throw new Error('No messages found in that file');
     const now = Date.now();
     const chat = { id: db.uid(), charId: S.char.id, title: file.name.replace(/\.jsonl?$/i, '').slice(0, 60), createdAt: now, updatedAt: now, messages: msgs };
+    const restored = restoreExportedChatMemory(chat, meta?.chat_metadata);
     await saveChat(chat);
-    toast(`Imported ${msgs.length} messages`);
+    toast(`Imported ${msgs.length} messages${restored ? ' with summary data' : ''}`);
     go(`#/chat/${S.char.id}/${chat.id}`);
   } catch (e) {
     toast('Import failed: ' + e.message, 5000);
@@ -4407,7 +4483,9 @@ const actions = {
     if (el.dataset.id === S.chat.id) { closeSheet(); go(`#/chat/${S.char.id}/${S.chats[0] ? S.chats[0].id : ''}`); render(); } else chatMenu();
   },
   'view-prompt': viewPrompt,
-  'export-chat': exportChat,
+  'export-chat': exportChatChoice,
+  'export-chat-standard': () => { closeSheet(); exportChat(false); },
+  'export-chat-memory': () => { closeSheet(); exportChat(true); },
   'import-chat': importChat,
 
   'edit-back': () => {
