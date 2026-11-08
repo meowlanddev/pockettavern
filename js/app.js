@@ -17,7 +17,8 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9';
+const VERSION = '1.9.9.0 (0.4)';
+const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -1288,7 +1289,7 @@ async function renderHome() {
   const showFolders = !tagOn && !q && !S.libFav && folders.length;
   app.innerHTML = `
     <header class="bar">
-      <h1 class="title">PocketTavern</h1>
+      <h1 class="title">${BUILD_NAME}</h1>
       <div class="spacer"></div>
       <button class="icon-btn" data-action="go" data-to="#/search" aria-label="Search chats">${ICONS.search}</button>
       <button class="icon-btn" data-action="import-files" aria-label="Import character">${ICONS.import}</button>
@@ -3450,7 +3451,7 @@ function renderSettingsView(open) {
       ${sec('appearance', 'Appearance', apBody)}
       ${sec('ui', 'Interface', uiBody)}
       ${sec('data', 'Data & backup', dataBody)}
-      <p class="muted small center">PocketTavern ${VERSION}</p>
+      <p class="muted small center">${BUILD_NAME} — ${VERSION}</p>
       <div class="bottom-space"></div>
     </main>`;
 
