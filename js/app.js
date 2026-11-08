@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.7)';
+const VERSION = '1.9.9.0 (0.8)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -626,12 +626,25 @@ async function runAuditor(chat, msg) {
 }
 
 // ---------- Narrative Database: independent cumulative summarization ----------
+function databaseDuration(seconds) {
+  const n = Math.max(0, Math.round(seconds));
+  if (n < 60) return n + 's';
+  if (n < 3600) return Math.floor(n / 60) + 'm ' + (n % 60) + 's';
+  return Math.floor(n / 3600) + 'h ' + Math.floor(n % 3600 / 60) + 'm';
+}
+function databaseEstimate(progress) {
+  if (!progress || !progress.timings?.length) return '';
+  const average = progress.timings.reduce((sum, n) => sum + n, 0) / progress.timings.length;
+  const left = Math.max(0, progress.total - progress.done);
+  return left ? ' · ~' + databaseDuration(average * left) + ' remaining (rough estimate)' : '';
+}
+
 function updateDatabaseBanner() {
   const banner = $('#ndb-running-banner');
   if (!banner) return;
   const progress = S.dbProgress && S.chat && S.dbProgress.chatId === S.chat.id ? S.dbProgress : null;
   banner.hidden = !progress;
-  if (progress) banner.textContent = '📚 Narrative Database: ' + progress.message.toLowerCase() + '… (' + Math.min(progress.done + 1, progress.total) + '/' + progress.total + ' batches)' + (progress.lastSeconds != null ? ' · last batch ' + progress.lastSeconds + 's' : '') + '. This might take a while…';
+  if (progress) banner.textContent = '📚 Narrative Database: ' + progress.message.toLowerCase() + '… (' + Math.min(progress.done + 1, progress.total) + '/' + progress.total + ' batches)' + (progress.lastSeconds != null ? ' · last batch ' + progress.lastSeconds + 's' : '') + databaseEstimate(progress) + '. This might take a while…';
 }
 function databaseSheet() {
   const chat = S.chat;
@@ -640,6 +653,8 @@ function databaseSheet() {
   const stale = NDB.isStale(chat.messages, dbState);
   const pending = NDB.pendingTokens(chat.messages, dbState?.covered || 0);
   const prog = S.dbProgress && S.dbProgress.chatId === chat.id ? S.dbProgress : null;
+  const rebuildStart = chat.narrativeDbPending && !NDB.isStale(chat.messages, chat.narrativeDbPending) ? chat.narrativeDbPending.covered : 0;
+  const rebuildBatches = NDB.countBatches(chat.messages, rebuildStart, cfg.batchTokens);
   openSheet(`
     <div class="sheet-title" id="ndb-sheet">Narrative Database ${prog ? '<span class="muted small">· processing…</span>' : ''}</div>
     <p class="hint">Independent of Summarize and Summaryception. Processes the original chat chronologically; the chat is never forked or deleted.</p>
@@ -648,8 +663,9 @@ function databaseSheet() {
       <div><b>≈${Math.round(pending / 1000)}k</b> pending tokens</div>
       <div><b>${(dbState?.checkpoints || []).length}</b> checkpoints</div>
     </div>
+    <p class="hint">Full rebuild: approximately ${rebuildBatches} sequential model calls at the current batch size (${Math.round(cfg.batchTokens).toLocaleString()} estimated tokens). ${rebuildStart ? 'Valid partial rebuild detected; estimate covers remaining messages. ' : ''}Timing estimate appears after the first successful batch; later batches may take longer as the database grows. API costs may apply.</p>
     ${stale ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Earlier messages were edited, deleted or reordered. Database is stale. Use Rebuild from Chat History.</p>' : ''}
-    ${prog ? `<p class="hint">${esc(prog.message)} (${prog.done}/${prog.total} batches).${prog.lastSeconds != null ? ` Last batch: ${prog.lastSeconds}s.` : ''} This might take a while… Progress is saved after each successful batch.</p>` : ''}
+    ${prog ? `<p class="hint">${esc(prog.message)} (${prog.done}/${prog.total} batches).${prog.lastSeconds != null ? ` Last batch: ${databaseDuration(prog.lastSeconds)}.${databaseEstimate(prog)}` : ''} This might take a while… Progress is saved after each successful batch.</p>` : ''}
     ${chat.narrativeDbPending ? `<p class="hint">A partial rebuild is saved (${chat.narrativeDbPending.covered} messages). Rebuild from Chat History resumes this pending work; Clear removes it.</p>` : ''}
     <div class="row wrap">
       <button class="btn primary" data-action="ndb-update" ${prog || stale ? 'disabled' : ''}>Update from Last Checkpoint</button>
@@ -690,8 +706,8 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
   const working = rebuild ? structuredClone(pendingRebuild || { text: '', covered: 0, checkpoints: [] }) : {
     text: old?.text || '', covered: start, checkpoints: [...(old?.checkpoints || [])],
   };
-  const estimatedTotal = Math.max(1, Math.ceil(NDB.pendingTokens(chat.messages, working.covered) / Math.max(1000, cfg.batchTokens)));
-  S.dbProgress = { chatId: chat.id, done: 0, total: estimatedTotal, message: rebuild ? 'Rebuilding' : 'Updating' };
+  const estimatedTotal = Math.max(1, NDB.countBatches(chat.messages, working.covered, cfg.batchTokens));
+  S.dbProgress = { chatId: chat.id, done: 0, total: estimatedTotal, timings: [], message: rebuild ? 'Rebuilding' : 'Updating' };
   updateDatabaseBanner();
   if (!silent) { toast('Narrative Database: processing… This might take a while…', 5000); if ($('#ndb-sheet')) databaseSheet(); }
   let succeeded = false;
@@ -718,6 +734,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
       else { chat.narrativeDbPending = structuredClone(working); await saveChat(chat); }
       S.dbProgress.done++;
       S.dbProgress.lastSeconds = batchSeconds;
+      S.dbProgress.timings.push(batchSeconds);
       console.info('Narrative Database batch', S.dbProgress.done, 'of', S.dbProgress.total, 'took', batchSeconds, 'seconds; output ~', NDB.estimateTokens(result), 'tokens');
       updateDatabaseBanner();
       if ($('#ndb-sheet')) databaseSheet();
@@ -4259,7 +4276,12 @@ const actions = {
   'qa-memory': memorySheet,
   'qa-database': databaseSheet,
   'ndb-update': () => runDatabase(S.chat, { flush: true }),
-  'ndb-rebuild': () => { if (confirm('Rebuild Narrative Database from the full edited chat? Any valid partial rebuild will be resumed. The current database stays active until the rebuild succeeds. This may make many paid API calls.')) runDatabase(S.chat, { rebuild: true, flush: true }); },
+  'ndb-rebuild': () => {
+    const chat = S.chat;
+    const partial = chat.narrativeDbPending && !NDB.isStale(chat.messages, chat.narrativeDbPending) ? chat.narrativeDbPending : null;
+    const batches = NDB.countBatches(chat.messages, partial?.covered || 0, S.settings.ext.database.batchTokens);
+    if (confirm('Rebuild Narrative Database? Estimated remaining: ' + batches + ' sequential model requests for ' + chat.messages.length + ' messages. Large histories can take a long time and may incur API charges. Timing varies by model; the app will estimate remaining time after the first batch. The current database stays active until the rebuild succeeds. Continue?')) runDatabase(chat, { rebuild: true, flush: true });
+  },
   'ndb-cancel': () => { S.dbCancel = true; toast('Cancel requested — stopping after current API call.'); },
   'ndb-clear': async () => {
     if (!confirm('Clear Narrative Database for this chat? Chat messages and other memory systems remain untouched.')) return;

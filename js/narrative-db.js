@@ -144,6 +144,18 @@ export function nextBatch(messages, start, targetTokens = 8000, flush = false) {
   return { start, end, tokens, messages: messages.slice(start, end).filter(m => !m.hidden && messageText(m).trim()) };
 }
 
+// Count actual whole-message batches, which can differ from tokens / target.
+export function countBatches(messages, start = 0, targetTokens = 8000) {
+  let count = 0, cursor = start;
+  while (cursor < messages.length) {
+    const batch = nextBatch(messages, cursor, targetTokens, true);
+    if (!batch || batch.end <= cursor) break;
+    cursor = batch.end;
+    count++;
+  }
+  return count;
+}
+
 export function buildUpdateInput(previous, batch, speaker) {
   const entries = batch.messages.map(m => `<message role="${m.role}">\n${speaker(m)}: ${messageText(m)}\n</message>`).join('\n\n');
   return `<previous_database>\n${previous || '(No previous database. Create the first complete database from the supplied messages.)'}\n</previous_database>\n\n<new_roleplay_messages>\n${entries}\n</new_roleplay_messages>\n\nUpdate the complete database using only the prior database and new messages. Output the full replacement database.`;
