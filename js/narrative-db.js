@@ -206,3 +206,51 @@ export function checkedDatabase(text) {
   }
   return result;
 }
+
+/**
+ * Conservative continuity warnings. These are retry hints, not proof of a
+ * semantic error: a fact may have been legitimately resolved or rewritten.
+ * Check exact protected strings and explicit dossier/task structure only.
+ */
+export function continuityWarnings(previous, candidate, newMessages = []) {
+  if (!String(previous || '').trim()) return [];
+  const before = String(previous), after = String(candidate);
+  const incoming = newMessages.map(m => messageText(m)).join('\n');
+  const warnings = [];
+  const section = (text, heading, next) => {
+    const start = text.indexOf(heading);
+    if (start < 0) return '';
+    const from = start + heading.length;
+    const end = next ? text.indexOf(next, from) : -1;
+    return text.slice(from, end < 0 ? undefined : end);
+  };
+  const oldDossiers = section(before, '## ENTITY DOSSIERS', '## THE WEB');
+  const names = [...oldDossiers.matchAll(/^\*\*([^*\n]+)\*\*\s*$/gm)].map(m => m[1].trim());
+  for (const name of names) {
+    if (name.length < 3 || name.length > 90) continue;
+    if (!after.toLowerCase().includes(name.toLowerCase()))
+      warnings.push('Established character absent from the entire replacement: ' + name);
+  }
+  const oldTasks = section(before, '### Active Tasks', '## THE CHRONICLE');
+  const newTasks = section(after, '### Active Tasks', '## THE CHRONICLE');
+  for (const match of oldTasks.matchAll(/^[-*]\s+(.+)$/gm)) {
+    const task = match[1].trim();
+    // Only protect explicit deadlines: ordinary tasks can legitimately resolve.
+    const deadline = task.match(/\b(?:tomorrow|today|tonight|yesterday|next (?:day|week|month)|by \d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2})\b/i);
+    if (!deadline) continue;
+    const anchor = task.replace(/\*\*/g, '').split(/[.:;—–]/)[0].trim().slice(0, 70);
+    const present = newTasks.toLowerCase().includes(deadline[0].toLowerCase()) &&
+      (anchor.length < 5 || after.toLowerCase().includes(anchor.toLowerCase()));
+    // A completion in the new source is evidence for retirement, not proof.
+    const resolved = /\b(?:completed|finished|resolved|cancelled|canceled|retrieved|picked up)\b/i.test(incoming) &&
+      (anchor.length < 5 || incoming.toLowerCase().includes(anchor.toLowerCase()));
+    if (!present && !resolved)
+      warnings.push('Check whether active deadline/task was lost or changed: ' + task.slice(0, 180));
+  }
+  // Only compare explicitly labelled timeline branches; not all dates or numbers.
+  const timelineLabels = [...before.matchAll(/^[-*]\s*\*\*([^*\n]*(?:timeline|branch)[^*\n]*)\*\*/gim)].map(m => m[1].trim());
+  for (const label of timelineLabels)
+    if (!after.toLowerCase().includes(label.toLowerCase()))
+      warnings.push('Check missing timeline branch: ' + label.slice(0, 100));
+  return [...new Set(warnings)].slice(0, 12);
+}
