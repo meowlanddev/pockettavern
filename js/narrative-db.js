@@ -18,24 +18,24 @@ Update the complete Narrative Database using the previous database and new rolep
 
 **Each consequential fact should have one primary home.** Other sections may mention only the current implication, not retell the underlying event. Apply this rule to existing database text as well as new updates.
 
-- **Chronicle owns history:** What happened, when, to whom, who revealed what, and lasting outcomes. Put major death tolls, invasion timelines, cause-and-effect chains, decisive conversations, and irreversible developments here once. Never copy the same full history into World Mechanics or Resolved Threads.
+- **Chronicle owns history:** What happened, when, to whom, who revealed what, and lasting outcomes. Put death tolls, timeline branches, causes, decisive choices, and irreversible changes here once. Compress old scenes into outcomes, not play-by-play accounts. Never copy full history into other sections.
 - **Dossiers own character state:** Only the changes a person carries into subsequent scenes—current condition, new knowledge/secrets, consequential personal choices, open goals, and a few key items. Do not retell their chronological history or restate events recorded in the Chronicle. One terse line may identify the resulting change.
 - **The Web owns relationship state:** What is now different between people (trust, commitment, estrangement, hidden feelings, promises). Not an account of conversations, gifts, meals, or movements that produced that state.
 - **World Mechanics owns persistent mechanics:** Novel RP-specific rules, unusual setting constraints, and operative technology. NOT the plot history in which they were discovered. A timeline's death toll and war progression belong in the Chronicle; mechanisms such as the Mother Box leak belong here.
-- **The Ledger owns what remains open:** Unanswered questions, genuine outstanding decisions and actively pursued tasks, with responsible people/deadlines where established. Resolved Threads gets **one brief outcome per major closed thread only**, not another recap of completed scenes. Do not turn routine events into resolved threads.
+- **The Ledger owns only unfinished business:** Unanswered questions, unresolved consequences, and active tasks with owners/deadlines where known. There is NO Resolved Threads section. When a thread closes, put its important outcome in the Chronicle, Web, Dossiers, or World Mechanics once; otherwise drop it. Remove old Resolved Threads headings and entries after moving any unique consequential facts to their proper home.
 - **Active Theatre owns the next beat:** Short scene orientation only. No inventory, emotional retelling, or long recap.
-- **Recent Log owns only fresh developments:** Up to five recent distinct meaningful events, much shorter than the Chronicle. When the same development is in the Historical Record, keep the Recent Log to a short recency cue, not a second full account.
+- **Recent Log is a handoff:** Up to three new changes needed for the next RP reply, not a second history. Skip anything already clear from Active Theatre unless it prevents a continuity mistake. Zero entries is fine.
 
-Before writing, notice repeated facts in the incoming database and consolidate them into their primary home. Never delete the **only** instance of a consequential fact. Avoid compensating for shorter dossiers by inflating the Ledger or World Mechanics.
+Before writing, notice repeated facts in the incoming database and consolidate them into their primary home. Move unique significant facts out of any inherited Resolved Threads before deleting that section. Never delete the **only** instance of a consequential fact. Avoid compensating for shorter dossiers by inflating the Chronicle, Ledger, or World Mechanics.
 
 ## WRITING & COMPRESSION RULES
 
-- **Information-dense, plain prose. Use the fewest words that preserve meaning, causality, and uncertainty.** Prefer direct verbs, short sentences, and concrete facts. Remove padding, repeated qualifiers, decorative adjectives, dramatic narration, and needless transitions.
-- Write like a compact continuity reference, **not like RP prose or a scene recap**. Do not imitate lyrical narration or describe emotions with multiple synonyms.
+- **Write like quick, clear notes, not polished prose.** Choose short common words: 'gave' not 'provided'; 'found' not 'discovered'; 'used' not 'utilized'; 'asked' not 'requested'; 'kept' not 'maintained'. Cut filler like 'in order to', 'proceeded to', 'was able to', and 'it is important to note'. Short words alone do not guarantee fewer tokens: remove needless ideas and clauses too.
+- Prefer compact, natural sentences or fragments when clear. **Do not recount minor scene beats.** Record what changed, who knows, and why it matters. Never replace scene prose with equally long formal synonyms; measure the words actually saved. Avoid cryptic abbreviations or shorthand that could confuse the RP model.
 - Preserve precise consequential numbers, names, identifiers, dates, and timelines. Never trade an exact established fact for vague phrasing merely to save space.
-- Merge related minor events into one chronological entry, keeping the distinct outcomes and causal links. Compress wording, **not** significant information.
+- Group related minor events by their lasting outcome; drop routine motion, meal details, clothing, repeated reactions, and minute-by-minute action once the scene ends. Preserve exact chronology only where order or timing changes the plot. Compress wording, **not** significant information.
 - Refer to an event outside its primary section only when essential to the section's purpose; describe its result in a short phrase rather than restating its sequence.
-- On every update, actively remove inherited bloat from the previous database. Existing prose is not sacred; established facts are. A prior checkpoint's incidental detail is not automatically worth retaining.
+- On every update, trim inherited bloat, including the old Chronicle. Existing prose is not sacred; established facts are. Summarize a resolved visit or conversation in one brief outcome statement, not five equal-length sentences. A past checkpoint's incidental detail is not automatically worth retaining.
 - No fixed total token ceiling or historical-event count. Database growth should track meaningful new developments, not message count.
 
 ## REQUIRED OUTPUT
@@ -44,7 +44,7 @@ Before writing, notice repeated facts in the incoming database and consolidate t
 
 ## ACTIVE THEATRE
 
-**Current Context:** Prefer one or two short sentences (roughly 40–65 words maximum where feasible): current time/place, participants, immediate situation, next beat. No recent-scene recap, scenic description, routine objects, or repeated dialogue.
+**Current Context:** One or two short sentences: time/place, participants, situation, next beat. No recap or filler.
 
 **Writing Style:** Concisely preserve established POV, tense, formatting, and player-character control rules. Do not add new instructions.
 
@@ -79,25 +79,22 @@ Only RP-established persistent mechanisms, unusual facts, discoveries, or deviat
 ### Unresolved Threads
 Distinct unresolved mysteries, conflicts, and consequential uncertainties. Never delete one merely because it has not been mentioned recently.
 
-### Resolved Threads
-Only major previously open threads that have genuinely been settled. One short outcome phrase each. **Do not list completed scenes, relationship milestones, routine actions, or items already clear from the Chronicle.** Leave this section empty when nothing qualifies.
-
 ### Active Tasks
-Current plans, responsible people, deadlines, and status (proposed / agreed / underway / completed) when relevant. Do not relabel proposals as completed actions.
+Only unfinished plans, responsible people, deadlines, and status (proposed / agreed / underway) where relevant. Drop completed tasks after recording any lasting outcome in its primary section.
 
 ## THE CHRONICLE
 
 ### Historical Record
 Cumulative record of **significant RP events**, earliest first. Preserve consequential outcomes, causality, revelations, timeline branches, exact stakes, and lasting character or relationship developments indefinitely. A devastating death toll or crucial revelation remains even if it does not affect the next scene.
 
-Gradually merge adjacent older scenes into compact entries when they form one meaningful development. Keep distinct events separate where necessary to preserve chronology or cause and effect. Omit routine actions when they no longer matter; keep their important outcomes. Do not impose an arbitrary number of entries.
+Merge old scenes by meaningful result. One compact entry may cover a whole visit or conversation; include decisive words or exact times only if they affect later events. Give wars, major discoveries, and irreversible choices more room than routine scenes. Preserve cause and effect, protected numbers, dates, identities, and unknowns. Drop old play-by-play details, not major facts. No fixed entry count.
 
 ### Recent Log
-Up to five newest **distinct meaningful developments**, newest first. Usually one short sentence each; avoid detailed beat-by-beat scene retellings. As older Recent Log items roll off, preserve their lasting consequences in the Historical Record and remove temporary detail. Do not duplicate the same event under multiple names.
+Zero to three fresh **changes needed for the next reply**, newest first. Use short notes, not beat-by-beat actions or Chronicle duplicates. When an item becomes old, keep its lasting outcome in the proper section and drop the handoff note.
 
 ## SILENT VERIFICATION
 
-Before output, check: each consequential fact has one primary home with no full retelling elsewhere; Ledger and World Mechanics are not substitute chronicles; correct timeline and ordering; no invented facts; exact protected numbers/identifiers retained; private knowledge boundaries intact; significant earlier events, promises, deaths, mysteries, and relationship changes not lost; tasks not prematurely resolved; Active Theatre brief; no lorebook duplication; no padded prose or excessive repetition. If an old entry is verbose, rewrite it more tightly without deleting its consequential facts.
+Before output, check: each consequential fact has one primary home; no Resolved Threads heading; no redundant scene log; Ledger and World Mechanics are not substitute chronicles; correct timeline and ordering; no invented facts; exact numbers/identifiers kept; knowledge boundaries intact; past deaths, promises, mysteries, and relationship changes still recorded; open tasks not prematurely closed; Active Theatre short; no lorebook repetition; plain words and few clauses. If an old entry is verbose, rewrite it more tightly without deleting its consequential facts.
 
 Output **only** the complete updated Markdown database.`;
 
@@ -163,8 +160,9 @@ export function buildUpdateInput(previous, batch, speaker) {
 
 export function checkedDatabase(text) {
   const result = String(text || '').trim().replace(/^```(?:markdown|md)?\s*\n/i, '').replace(/\n```\s*$/, '').trim();
-  const required = ['ACTIVE THEATRE','ENTITY DOSSIERS','THE WEB','WORLD MECHANICS','THE LEDGER','THE CHRONICLE','Recent Log'];
+  const required = ['ACTIVE THEATRE','ENTITY DOSSIERS','THE WEB','WORLD MECHANICS','THE LEDGER','Unresolved Threads','Active Tasks','THE CHRONICLE','Historical Record','Recent Log'];
   const missing = required.filter(x => !result.includes(x));
   if (!result || missing.length) throw new Error('Database response missing required sections: ' + (missing.length ? missing.join(', ') : 'empty response') + '. Previous version was retained.');
+  if (/^#{2,4}\\s+Resolved Threads\\s*$/im.test(result)) throw new Error('Database response used old Resolved Threads section. Update the Narrative Database prompt to version 0.13 and retry. Previous version was retained.');
   return result;
 }
