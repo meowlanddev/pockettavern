@@ -51,3 +51,13 @@ const consolidated = mk('**Catrin**\n- **Open:** Waiting.', '- Retrieve Leesie t
 assert.deepEqual(DB.continuityWarnings(before, consolidated), [], 'moving a character fact to Chronicle is allowed');
 assert.throws(() => DB.checkedDatabase('# NARRATIVE\n## ACTIVE THEATRE\n## ENTITY DOSSIERS'), /missing required sections/);
 console.log('PASS: continuity checks for character loss, deadlines, timeline branches, and legitimate consolidation');
+
+// Incomplete-memory shorthand must never be saved as a valid checkpoint.
+for (const shorthand of [
+  '- No change this update; see Chronicle.',
+  '- **Developments:** (unchanged — see Chronicle)',
+  '- **Bruce Wayne — abandoned timeline** No change this update; see Chronicle.',
+  '- *(unchanged from prior database)*',
+]) {
+  assert.throws(() => mk('**Bruce Wayne**\n' + shorthand, '- Retrieve Leesie tomorrow.'), /incomplete-memory placeholder/, shorthand);
+}
