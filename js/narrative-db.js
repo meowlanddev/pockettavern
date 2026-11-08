@@ -251,10 +251,18 @@ export function continuityWarnings(previous, candidate, newMessages = []) {
     if (!present && !resolved)
       warnings.push('Check whether active deadline/task was lost or changed: ' + task.slice(0, 180));
   }
-  // Only compare explicitly labelled timeline branches; not all dates or numbers.
-  const timelineLabels = [...before.matchAll(/^[-*]\s*\*\*([^*\n]*(?:timeline|branch)[^*\n]*)\*\*/gim)].map(m => m[1].trim());
-  for (const label of timelineLabels)
-    if (!after.toLowerCase().includes(label.toLowerCase()))
-      warnings.push('Check missing timeline branch: ' + label.slice(0, 100));
+  // Timeline headings may be renamed; compare branch meaning, not exact labels.
+  const timelineLabels = [...before.matchAll(/^[-*]\\s*\\*\\*([^*\\n]*(?:timeline|branch)[^*\\n]*)\\*\\*/gim)].map(m => m[1].trim());
+  for (const label of timelineLabels) {
+    if (after.toLowerCase().includes(label.toLowerCase())) continue;
+    const original = /\\b(?:origin|original|abandoned|erased|prior|previous|old)\\b/i.test(label);
+    const altered = /\\b(?:altered|new|current|rewritten|revised)\\b/i.test(label);
+    const equivalent = original
+      ? /\\b(?:origin(?:al)?|abandoned|erased|prior|previous|old)\\s*[- ]?timeline\\b|\\btimeline\\s+(?:of origin|before|prior to)\\b/i.test(after)
+      : altered
+        ? /\\b(?:altered|new|current|rewritten|revised)\\s*[- ]?timeline\\b/i.test(after)
+        : /\\btimeline\\b|\\bbranch\\b/i.test(after);
+    if (!equivalent) warnings.push('Check missing timeline branch: ' + label.slice(0, 100));
+  }
   return [...new Set(warnings)].slice(0, 12);
 }
