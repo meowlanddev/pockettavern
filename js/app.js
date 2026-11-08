@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.15)';
+const VERSION = '1.9.9.0 (0.16)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3440,7 +3440,7 @@ function renderSettingsView(open) {
       <p class="hint">Version 0.15 rewrites the prompt around fact selection, section ownership, and source-fidelity checks. Saved custom prompts are unchanged; restore this default before rebuilding to test 0.15.</p>
     </div></details>
     <div id="ndb-settings-progress" class="ndb-running-banner" hidden></div>
-    <button class="btn" data-action="qa-database">Manage Narrative Database / Rebuild from Chat History</button>
+    <button class="btn ndb-manage-btn" data-action="qa-database">Manage Narrative Database / Rebuild from Chat History</button>
     <p class="hint">Choose only one memory mode at a time. Switching modes retains each mode's stored data. Narrative Database does not modify the original messages.</p>
     <h4 class="sub">🧠 Layered memory <span class="muted small">(Summaryception)</span></h4>
     ${tog('data-ext-mem-toggle', 'enabled', mm.enabled, 'Enabled', 'Recent chat stays word-for-word; older chat becomes layered memories and is “ghosted” (still visible to you, not sent)')}
