@@ -625,6 +625,13 @@ async function runAuditor(chat, msg) {
 }
 
 // ---------- Narrative Database: independent cumulative summarization ----------
+function updateDatabaseBanner() {
+  const banner = $('#ndb-running-banner');
+  if (!banner) return;
+  const progress = S.dbProgress && S.chat && S.dbProgress.chatId === S.chat.id ? S.dbProgress : null;
+  banner.hidden = !progress;
+  if (progress) banner.textContent = '📚 Narrative Database: ' + progress.message.toLowerCase() + '… (' + (progress.done + 1) + '/' + progress.total + ' batches)';
+}
 function databaseSheet() {
   const chat = S.chat;
   const cfg = S.settings.ext.database;
@@ -684,6 +691,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
   };
   const estimatedTotal = Math.max(1, Math.ceil(NDB.pendingTokens(chat.messages, working.covered) / Math.max(1000, cfg.batchTokens)));
   S.dbProgress = { chatId: chat.id, done: 0, total: estimatedTotal, message: rebuild ? 'Rebuilding' : 'Updating' };
+  updateDatabaseBanner();
   if (!silent) { toast('Narrative Database: processing…', 5000); if ($('#ndb-sheet')) databaseSheet(); }
   let succeeded = false;
   try {
@@ -706,6 +714,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
       if (!rebuild) { chat.narrativeDb = structuredClone(working); await saveChat(chat); }
       else { chat.narrativeDbPending = structuredClone(working); await saveChat(chat); }
       S.dbProgress.done++;
+      updateDatabaseBanner();
       if ($('#ndb-sheet')) databaseSheet();
       if (!(flush || rebuild)) { succeeded = true; break; }
       if (working.covered >= chat.messages.length) { succeeded = true; break; }
@@ -719,6 +728,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
     toast('Narrative Database: ' + (e.message || e), 8000);
   } finally {
     S.dbBusy = false; S.dbProgress = null; S.dbCancel = false;
+    updateDatabaseBanner();
     if ($('#ndb-sheet')) databaseSheet();
   }
 }
@@ -2203,6 +2213,7 @@ async function renderChatView(charId, chatId) {
       </button>
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
     </header>
+    <div id="ndb-running-banner" role="status" aria-live="polite" style="padding:8px 12px;text-align:center;background:var(--bg2,rgba(128,128,128,.18));font-size:.85em" hidden></div>
     <div id="sheld">
       <div id="expr-panel" class="expr-panel" data-action="expr-toggle" hidden></div>
       <main class="scroll messages" id="chat"></main>
@@ -2217,6 +2228,7 @@ async function renderChatView(charId, chatId) {
         </div>
       </footer>
     </div>`;
+  updateDatabaseBanner();
   const input = $('#send_textarea');
   input.value = getDraft(S.chat);
   autosize(input);
@@ -3268,7 +3280,7 @@ function renderSettingsView(open) {
     ${extSections()}
     <h4 class="sub">📚 Narrative Database <span class="muted small">(cumulative continuity)</span></h4>
     ${tog('data-ext-ndb-toggle', 'enabled', nd.enabled, 'Enabled', 'Third memory mode: structured rolling database, independently stored from Summaryception and Summarize')}
-    <label class="field inline"><span class="label">Update every (new RP tokens)</span><input inputmode="numeric" data-ext-ndb="batchTokens" value="${nd.batchTokens}"></label>
+    <label class="field inline"><span class="label">Update every (new RP tokens)<span class="hint">Default 8,000. The banner at the top of chat stays visible while an update runs.</span></span><input inputmode="numeric" data-ext-ndb="batchTokens" value="${nd.batchTokens}"></label>
     <label class="field inline"><span class="label">Keep verbatim (recent RP tokens)</span><input inputmode="numeric" data-ext-ndb="recentTokens" value="${nd.recentTokens}"></label>
     <label class="field inline"><span class="label">Max database output tokens</span><input inputmode="numeric" data-ext-ndb="maxOutputTokens" value="${nd.maxOutputTokens}"></label>
     <label class="field"><span class="label">Summarizer model (optional, blank = current model)</span><input data-ext-ndb="model" value="${esc(nd.model)}" autocapitalize="off"></label>
