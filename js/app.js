@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.4)';
+const VERSION = '1.9.9.0 (0.5)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -631,7 +631,7 @@ function updateDatabaseBanner() {
   if (!banner) return;
   const progress = S.dbProgress && S.chat && S.dbProgress.chatId === S.chat.id ? S.dbProgress : null;
   banner.hidden = !progress;
-  if (progress) banner.textContent = '📚 Narrative Database: ' + progress.message.toLowerCase() + '… (' + (progress.done + 1) + '/' + progress.total + ' batches)';
+  if (progress) banner.textContent = '📚 Narrative Database: ' + progress.message.toLowerCase() + '… (' + Math.min(progress.done + 1, progress.total) + '/' + progress.total + ' batches). This might take a while…';
 }
 function databaseSheet() {
   const chat = S.chat;
@@ -649,7 +649,7 @@ function databaseSheet() {
       <div><b>${(dbState?.checkpoints || []).length}</b> checkpoints</div>
     </div>
     ${stale ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Earlier messages were edited, deleted or reordered. Database is stale. Use Rebuild from Chat History.</p>' : ''}
-    ${prog ? `<p class="hint">${esc(prog.message)} (${prog.done}/${prog.total} batches). Progress is saved after each successful batch.</p>` : ''}
+    ${prog ? `<p class="hint">${esc(prog.message)} (${prog.done}/${prog.total} batches). This might take a while… Progress is saved after each successful batch.</p>` : ''}
     ${chat.narrativeDbPending ? `<p class="hint">A partial rebuild is saved (${chat.narrativeDbPending.covered} messages). Rebuild from Chat History resumes this pending work; Clear removes it.</p>` : ''}
     <div class="row wrap">
       <button class="btn primary" data-action="ndb-update" ${prog || stale ? 'disabled' : ''}>Update from Last Checkpoint</button>
@@ -693,7 +693,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
   const estimatedTotal = Math.max(1, Math.ceil(NDB.pendingTokens(chat.messages, working.covered) / Math.max(1000, cfg.batchTokens)));
   S.dbProgress = { chatId: chat.id, done: 0, total: estimatedTotal, message: rebuild ? 'Rebuilding' : 'Updating' };
   updateDatabaseBanner();
-  if (!silent) { toast('Narrative Database: processing…', 5000); if ($('#ndb-sheet')) databaseSheet(); }
+  if (!silent) { toast('Narrative Database: processing… This might take a while…', 5000); if ($('#ndb-sheet')) databaseSheet(); }
   let succeeded = false;
   try {
     while (!S.dbCancel) {
