@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.14)';
+const VERSION = '1.9.9.0 (0.15)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3436,8 +3436,8 @@ function renderSettingsView(open) {
     <details class="section"><summary>Database update prompt and injection template</summary><div class="sec-body">
       <label class="field"><span class="label">Complete database update prompt</span><textarea rows="12" data-ext-ndb="prompt">${esc(nd.prompt)}</textarea></label>
       <label class="field"><span class="label">Injection template (use {{database}})</span><textarea rows="3" data-ext-ndb="template">${esc(nd.template)}</textarea></label>
-      <button class="btn" data-action="ndb-reset-prompt">Restore default update prompt (0.14)</button>
-      <p class="hint">Version 0.14 keeps compact notes but adds stricter factual checks: no invented motives, reassigned conflicts, mismatched deadlines, or speculative mysteries. Saved custom prompts are unchanged; restore this default before rebuilding to test 0.14.</p>
+      <button class="btn" data-action="ndb-reset-prompt">Restore default update prompt (0.15)</button>
+      <p class="hint">Version 0.15 rewrites the prompt around fact selection, section ownership, and source-fidelity checks. Saved custom prompts are unchanged; restore this default before rebuilding to test 0.15.</p>
     </div></details>
     <div id="ndb-settings-progress" class="ndb-running-banner" hidden></div>
     <button class="btn" data-action="qa-database">Manage Narrative Database / Rebuild from Chat History</button>
