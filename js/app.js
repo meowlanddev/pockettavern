@@ -780,7 +780,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
         try {
           result = validate(await memCall(system, input, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
         } catch (validationError) {
-          const repairInput = input + '\\n\\n<database_repair>\\nThe previous replacement was rejected: ' + String(validationError.message || validationError).slice(0, 500) + '\\nReturn a FULL standalone database with every required section. Replace shorthand such as "unchanged", "no change; see Chronicle", and "same as before" with concrete facts from the previous database. Do not omit prior facts merely because they were not mentioned in the new messages.\\n</database_repair>';
+          const repairInput = input + '\n\n<database_repair>\nThe previous replacement was rejected: ' + String(validationError.message || validationError).slice(0, 500) + '\nReturn a FULL standalone database with every required section. Replace shorthand such as "unchanged", "no change; see Chronicle", and "same as before" with concrete facts from the previous database. Do not omit prior facts merely because they were not mentioned in the new messages.\n</database_repair>';
           result = validate(await memCall(system, repairInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
         }
         // 0.22: retry once when the replacement appears to lose protected continuity.
