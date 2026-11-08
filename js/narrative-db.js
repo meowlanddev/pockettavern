@@ -182,7 +182,7 @@ export function checkedDatabase(text) {
   const headings = [...result.matchAll(/^(#{2,4})\s+([^\n#]+?)\s*$/gm)].map(m => ({ level: m[1].length, title: m[2].trim(), index: m.index }));
   const missing = required.filter(([title, level]) => !headings.some(h => h.title === title && h.level === level)).map(([title]) => title);
   if (!result || missing.length) throw new Error('Database response missing required sections: ' + (missing.length ? missing.join(', ') : 'empty response') + '. Previous version was retained.');
-  if (headings.some(h => h.title === 'Resolved Threads')) throw new Error('Database response used old Resolved Threads section. Update the Narrative Database prompt to version 0.13 and retry. Previous version was retained.');
+  if (headings.some(h => h.title === 'Resolved Threads')) throw new Error('Database response used old Resolved Threads section. Remove the obsolete Resolved Threads section and retry. Previous version was retained.');
   const ordered = required.map(([title]) => headings.find(h => h.title === title).index);
   if (ordered.some((index, i) => i > 0 && index <= ordered[i - 1])) throw new Error('Database sections are out of order. Previous version was retained.');
 
