@@ -163,6 +163,6 @@ export function checkedDatabase(text) {
   const required = ['ACTIVE THEATRE','ENTITY DOSSIERS','THE WEB','WORLD MECHANICS','THE LEDGER','Unresolved Threads','Active Tasks','THE CHRONICLE','Historical Record','Recent Log'];
   const missing = required.filter(x => !result.includes(x));
   if (!result || missing.length) throw new Error('Database response missing required sections: ' + (missing.length ? missing.join(', ') : 'empty response') + '. Previous version was retained.');
-  if (/^#{2,4}\\s+Resolved Threads\\s*$/im.test(result)) throw new Error('Database response used old Resolved Threads section. Update the Narrative Database prompt to version 0.13 and retry. Previous version was retained.');
+  if (/^#{2,4}\s+Resolved Threads\s*$/im.test(result)) throw new Error('Database response used old Resolved Threads section. Update the Narrative Database prompt to version 0.13 and retry. Previous version was retained.');
   return result;
 }
