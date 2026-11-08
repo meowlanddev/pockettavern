@@ -170,10 +170,35 @@ export function buildUpdateInput(previous, batch, speaker) {
 }
 
 export function checkedDatabase(text) {
-  const result = String(text || '').trim().replace(/^```(?:markdown|md)?\s*\n/i, '').replace(/\n```\s*$/, '').trim();
-  const required = ['ACTIVE THEATRE','ENTITY DOSSIERS','THE WEB','WORLD MECHANICS','THE LEDGER','Unresolved Threads','Active Tasks','THE CHRONICLE','Historical Record','Recent Log'];
-  const missing = required.filter(x => !result.includes(x));
+  let result = String(text || '').trim().replace(/^\`\`\`(?:markdown|md)?\s*\n/i, '').replace(/\n\`\`\`\s*$/, '').trim();
+  // Match actual Markdown headings, not incidental words in prose. Recent Log is
+  // optional because its prompt explicitly allows zero entries.
+  const required = [
+    ['ACTIVE THEATRE', 2], ['ENTITY DOSSIERS', 2], ['THE WEB', 2],
+    ['WORLD MECHANICS', 2], ['THE LEDGER', 2],
+    ['Unresolved Threads', 3], ['Active Tasks', 3],
+    ['THE CHRONICLE', 2], ['Historical Record', 3],
+  ];
+  const headings = [...result.matchAll(/^(#{2,4})\s+([^\n#]+?)\s*$/gm)].map(m => ({ level: m[1].length, title: m[2].trim(), index: m.index }));
+  const missing = required.filter(([title, level]) => !headings.some(h => h.title === title && h.level === level)).map(([title]) => title);
   if (!result || missing.length) throw new Error('Database response missing required sections: ' + (missing.length ? missing.join(', ') : 'empty response') + '. Previous version was retained.');
-  if (/^#{2,4}\s+Resolved Threads\s*$/im.test(result)) throw new Error('Database response used old Resolved Threads section. Update the Narrative Database prompt to version 0.13 and retry. Previous version was retained.');
+  if (headings.some(h => h.title === 'Resolved Threads')) throw new Error('Database response used old Resolved Threads section. Update the Narrative Database prompt to version 0.13 and retry. Previous version was retained.');
+  const ordered = required.map(([title]) => headings.find(h => h.title === title).index);
+  if (ordered.some((index, i) => i > 0 && index <= ordered[i - 1])) throw new Error('Database sections are out of order. Previous version was retained.');
+
+  // A complete replacement must stand alone. These are references to memory
+  // omitted from the output, not compact statements of actual facts.
+  const placeholder = result.split('\n').find(line => {
+    const value = line.trim().replace(/^[-*]\s*/, '').replace(/^\*\*[^*]+\*\*\s*[:—-]?\s*/, '').trim();
+    return /\b(?:unchanged from (?:the )?(?:prior|previous|earlier|old) database|(?:see|refer to|same as) (?:the )?(?:prior|previous|earlier|old) database|all prior (?:knowledge|details|history|facts) retained|(?:all )?(?:prior|previous|earlier) (?:details|history|entries|information|facts) (?:remain )?unchanged)\b/i.test(line)
+      || /^(?:(?:[^:]{1,90}):\s*)?(?:unchanged|same as (?:before|above)|as (?:before|previously)|no changes)(?:\s*[.!])?$/i.test(value);
+  });
+  if (placeholder) throw new Error('Database response contains a reference to omitted earlier memory: ' + placeholder.trim().slice(0, 150) + '. Previous checkpoint was retained; resume to retry this batch.');
+
+  // Recent Log is an optional zero-to-three-item handoff. Normalize absent
+  // headings instead of rejecting an otherwise complete response.
+  if (!headings.some(h => h.title === 'Recent Log' && h.level === 3)) {
+    result += '\n\n### Recent Log\n- None.';
+  }
   return result;
 }
