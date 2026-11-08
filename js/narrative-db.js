@@ -194,6 +194,9 @@ export function checkedDatabase(text) {
     // the actual field content. "The passcode is unchanged" is a valid fact;
     // a field consisting only of "Unchanged this exchange" is not.
     const naked = value.replace(/^\*\*[^*]+\*\*\s*[:—-]?\s*/, '').trim();
+    // Reject self-referential shorthand even when it points to another section.
+    // A concrete fact such as "the passcode is unchanged" is still valid.
+    if (/^(?:no (?:new )?change(?:s)?(?: (?:this|since (?:the )?(?:last|previous)) (?:update|scene|batch))?|unchanged(?: (?:this|since (?:the )?(?:last|previous)) (?:update|scene|batch))?)(?:[;,. —-]+\s*(?:see|refer to)\s+(?:the\s+)?(?:chronicle|ledger|above|prior|previous|earlier)(?:\s+(?:section|entry|database))?)?[.!]?$/i.test(naked)) return true;
     return /\b(?:unchanged from (?:the )?(?:prior|previous|earlier|old) database|(?:see|refer to|same as) (?:the )?(?:prior|previous|earlier|old) database|all prior (?:knowledge|details|history|facts) retained|(?:all )?(?:prior|previous|earlier) (?:details|history|entries|information|facts) (?:remain )?unchanged)\b/i.test(line)
       || /^(?:unchanged(?:\s+(?:this (?:exchange|scene|turn|update|batch)|since (?:last|previous) (?:update|scene)|from (?:before|previously)))?|same as (?:before|above|previously)|as (?:before|previously)|no (?:new )?changes|(?:nothing|no updates) to (?:add|report))(?:\s*[.!])?$/i.test(naked);
   });
