@@ -6,7 +6,7 @@ This is an **unofficial, community-proposed extension** to PocketTavern 1.9.9 (s
 
 1. Make a backup of your existing PocketTavern data before testing a fork or modified deployment.
 2. Open **Settings → Extensions → Narrative Database** and enable it. This switches off the other two summarization modes, but doesn't erase their summaries.
-3. Default update threshold: **15,000 new RP tokens**. This counts original chat content, not the character card, lorebooks, or database itself. You can change it.
+3. Default update threshold: **8,000 new RP tokens**. This counts original chat content, not the character card, lorebooks, or database itself. You can change it.
 4. Set **Keep verbatim** to the desired amount of recent, original chat you want included alongside the database (default 15,000 tokens). This is a separate prompt-context overlap limit, not another summarization trigger.
 5. Use **Manage Narrative Database** in Settings or the chat quick-actions menu to see/edit the full database.
 6. For an existing long conversation, click **Rebuild from Chat History**. It processes the original messages in chronological batches, using each preceding complete database in the next call. The original chat is neither forked nor mutated.
@@ -38,7 +38,7 @@ No external package dependencies added. No server-side changes. API generation u
 
 Tested with Node syntax checks, a deterministic chronological-batching test, edit-detection tests, and a prompt-builder integration smoke test. **Not verified in a live PocketTavern browser session with an actual model/API key.** Please test with disposable chat data before making a pull request.
 
-- **Cost:** Catch-up of 160k tokens with a 15k batch size usually involves ~11 sequential model calls, each including the previous full database. Larger databases raise token costs and may exceed small context windows or output budgets.
+- **Cost:** Catch-up of 160k tokens with an 8k batch size usually involves ~20 sequential model calls, each including the previous full database. Larger databases raise token costs and may exceed small context windows or output budgets.
 - **Response validation:** Required headings are checked, but a well-formatted summary can still contain omissions or factual errors; users should review and correct it.
 - **Edited older messages:** Changing a covered message causes a staleness warning and suppresses automatic use of that database until rebuilt.
 - **Recent overlap:** The latest N tokens of original chat may also appear in the injected database, deliberately preserving scene nuance at the expense of some duplication.
@@ -55,3 +55,9 @@ node --experimental-default-type=module tests/narrative-db.test.mjs
 ```
 
 To send a contribution upstream, consider splitting the change into (1) independent engine and tests, (2) UI + persistence, (3) quality-of-life improvements after end-to-end browser testing.
+
+## Version 0.22 continuity safeguards
+
+After schema validation, the engine compares each candidate replacement with the previous database. It flags disappearing established character names, explicitly labelled timeline branches, and active tasks with deadlines that appear to drift. A flagged batch gets one targeted full-database retry; if the warning persists, the previous checkpoint is retained for manual review. This is a conservative heuristic, **not full semantic verification**: it can miss paraphrased omissions or flag legitimate corrections, especially when a task is resolved. No existing 0.14 update prompt is changed. The source-history checkpoint and staged-rebuild protections remain in place.
+
+The smoke tests now cover these heuristics and the required schema. End-to-end model testing is still required.
