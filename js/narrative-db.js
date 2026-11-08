@@ -232,7 +232,12 @@ export function continuityWarnings(previous, candidate, newMessages = []) {
   const names = [...oldDossiers.matchAll(/^\*\*([^*\n]+)\*\*\s*$/gm)].map(m => m[1].trim());
   for (const name of names) {
     if (name.length < 3 || name.length > 90) continue;
-    if (!after.toLowerCase().includes(name.toLowerCase()))
+    // Timeline qualifiers are not part of a character's identity.
+    // Still require the character's actual name to appear somewhere.
+    const baseName = name.replace(/\s*\([^)]*(?:timeline|branch)[^)]*\)\s*$/i, '')
+      .replace(/\s+[—–-]\s*[^—–-]*(?:timeline|branch)[^—–-]*$/i, '').trim();
+    const candidate = after.toLowerCase();
+    if (!candidate.includes(name.toLowerCase()) && !candidate.includes(baseName.toLowerCase()))
       warnings.push('Established character absent from the entire replacement: ' + name);
   }
   const oldTasks = section(before, '### Active Tasks', '## THE CHRONICLE');
@@ -252,16 +257,16 @@ export function continuityWarnings(previous, candidate, newMessages = []) {
       warnings.push('Check whether active deadline/task was lost or changed: ' + task.slice(0, 180));
   }
   // Timeline headings may be renamed; compare branch meaning, not exact labels.
-  const timelineLabels = [...before.matchAll(/^[-*]\\s*\\*\\*([^*\\n]*(?:timeline|branch)[^*\\n]*)\\*\\*/gim)].map(m => m[1].trim());
+  const timelineLabels = [...before.matchAll(/^[-*]\s*\*\*([^*\n]*(?:timeline|branch)[^*\n]*)\*\*/gim)].map(m => m[1].trim());
   for (const label of timelineLabels) {
     if (after.toLowerCase().includes(label.toLowerCase())) continue;
-    const original = /\\b(?:origin|original|abandoned|erased|prior|previous|old)\\b/i.test(label);
-    const altered = /\\b(?:altered|new|current|rewritten|revised)\\b/i.test(label);
+    const original = /\b(?:origin|original|abandoned|erased|prior|previous|old)\b/i.test(label);
+    const altered = /\b(?:altered|new|current|rewritten|revised)\b/i.test(label);
     const equivalent = original
-      ? /\\b(?:origin(?:al)?|abandoned|erased|prior|previous|old)\\s*[- ]?timeline\\b|\\btimeline\\s+(?:of origin|before|prior to)\\b/i.test(after)
+      ? /\b(?:origin(?:al)?|abandoned|erased|prior|previous|old)\s*[- ]?timeline\b|\btimeline\s+(?:of origin|before|prior to)\b/i.test(after)
       : altered
-        ? /\\b(?:altered|new|current|rewritten|revised)\\s*[- ]?timeline\\b/i.test(after)
-        : /\\btimeline\\b|\\bbranch\\b/i.test(after);
+        ? /\b(?:altered|new|current|rewritten|revised)\s*[- ]?timeline\b/i.test(after)
+        : /\btimeline\b|\bbranch\b/i.test(after);
     if (!equivalent) warnings.push('Check missing timeline branch: ' + label.slice(0, 100));
   }
   return [...new Set(warnings)].slice(0, 12);
