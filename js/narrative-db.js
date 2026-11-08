@@ -134,7 +134,7 @@ Do not output this checklist.
 Output only the complete updated database. No preamble, commentary, change summary, or audit. Keep Active Theatre, World Mechanics, and Ledger compact; preserve the established detail of Entity Dossiers and The Web; and give the Chronicle enough space to accurately preserve narrative continuity. Accuracy and useful continuity take priority over arbitrary brevity.`;
 
 export const DEFAULT_DATABASE_SETTINGS = Object.freeze({
-  enabled: false, batchTokens: 15000, recentTokens: 15000,
+  enabled: false, batchTokens: 8000, recentTokens: 15000,
   model: '', maxOutputTokens: 12000,
   role: 'system', position: 'before', depth: 0,
   template: '<narrative_database>\n{{database}}\n</narrative_database>',
@@ -161,8 +161,8 @@ export function pendingTokens(messages, covered = 0) {
 }
 
 // Entire messages only, no overlap; protects the user's prose from splitting mid-message.
-export function nextBatch(messages, start, targetTokens = 15000, flush = false) {
-  const limit = Math.max(1000, Number(targetTokens) || 15000);
+export function nextBatch(messages, start, targetTokens = 8000, flush = false) {
+  const limit = Math.max(1000, Number(targetTokens) || 8000);
   let tokens = 0, end = start;
   while (end < messages.length) {
     const m = messages[end];
