@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.10)';
+const VERSION = '1.9.9.0 (0.11)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -657,13 +657,26 @@ function databaseProgressHtml(progress) {
       <span>${progress.lastSeconds != null ? 'Last batch: ' + databaseDuration(progress.lastSeconds) : 'This might take a while…'}${databaseEstimate(progress)}</span>
     </div>`;
 }
+function databaseFailureHtml(chat) {
+  if (!chat?.narrativeDbLastError) return '';
+  const covered = chat.narrativeDbPending?.covered || 0;
+  const batchLabel = chat.narrativeDbErrorBatch ? ' · Failed at batch ' + chat.narrativeDbErrorBatch : '';
+  return `<div class="ndb-error-title">⚠ Narrative Database stopped${batchLabel}</div>
+    <div class="ndb-error-message">${esc(chat.narrativeDbLastError)}</div>
+    <div class="ndb-error-meta">${covered ? covered + ' messages saved in a partial rebuild. Resume from that checkpoint.' : 'No partial rebuild checkpoint saved yet. Retry from the beginning.'}</div>
+    <div class="row wrap"><button class="btn sm" data-action="qa-database">Open database manager</button>
+      <button class="btn sm" data-action="ndb-dismiss-error">Dismiss error</button></div>`;
+}
 function updateDatabaseBanner() {
   const progress = S.dbProgress && S.chat && S.dbProgress.chatId === S.chat.id ? S.dbProgress : null;
+  const errorHtml = !progress && S.chat ? databaseFailureHtml(S.chat) : '';
   for (const id of ['ndb-running-banner', 'ndb-settings-progress', 'ndb-sheet-progress']) {
     const el = $('#' + id);
     if (!el) continue;
-    el.hidden = !progress;
+    el.hidden = !progress && !errorHtml;
+    el.classList.toggle('ndb-error', !progress && !!errorHtml);
     if (progress) el.innerHTML = databaseProgressHtml(progress);
+    else if (errorHtml) el.innerHTML = errorHtml;
     else el.replaceChildren();
   }
 }
@@ -690,10 +703,10 @@ function databaseSheet() {
     ${stale ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Earlier messages were edited, deleted or reordered. Database is stale. Use Rebuild from Chat History.</p>' : ''}
     ${prog ? `<p class="hint">${esc(prog.message)} (${prog.done}/${prog.total} batches).${prog.lastSeconds != null ? ` Last batch: ${databaseDuration(prog.lastSeconds)}.${databaseEstimate(prog)}` : ''} This might take a while… Progress is saved after each successful batch.</p>` : ''}
     ${resumable ? `<p class="hint">Saved partial rebuild: ${chat.narrativeDbPending.covered} / ${chat.messages.length} messages processed. Resume continues from that checkpoint without repeating completed batches.</p>` : chat.narrativeDbPending ? '<p class="hint">A saved partial rebuild no longer matches this chat and cannot be resumed; start a fresh rebuild.</p>' : ''}
-    ${chat.narrativeDbLastError ? `<p class="hint" style="color:var(--danger,#e66)">Last rebuild error: ${esc(chat.narrativeDbLastError)}</p>` : ''}
+    ${chat.narrativeDbLastError && !prog && !resumable ? `<p class="hint">The failed batch can be retried from the beginning without deleting your current active database.</p>` : ''}
     <div class="row wrap">
       <button class="btn primary" data-action="ndb-update" ${prog || stale ? 'disabled' : ''}>Update from Last Checkpoint</button>
-      ${resumable ? `<button class="btn primary" data-action="ndb-resume" ${prog ? 'disabled' : ''}>▶ Resume partial rebuild</button>` : ''}
+      ${resumable ? `<button class="btn primary" data-action="ndb-resume" ${prog ? 'disabled' : ''}>▶ Resume partial rebuild</button>` : chat.narrativeDbLastError ? `<button class="btn primary" data-action="ndb-retry" ${prog ? 'disabled' : ''}>↻ Retry failed rebuild</button>` : ''}
       <button class="btn" data-action="ndb-rebuild" ${prog ? 'disabled' : ''}>${resumable ? 'Restart rebuild from beginning' : 'Rebuild from Chat History'}</button>
       ${prog ? '<button class="btn" data-action="ndb-cancel">Cancel after current batch</button>' : ''}
       <button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Database</button>
@@ -729,7 +742,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
   // A paused rebuild can resume without re-paying for all earlier successful batches.
   const pendingRebuild = rebuild && !restart && chat.narrativeDbPending && chat.narrativeDbPending.covered > 0 && !NDB.isStale(chat.messages, chat.narrativeDbPending)
     ? chat.narrativeDbPending : null;
-  if (rebuild) { delete chat.narrativeDbLastError; if (restart) { delete chat.narrativeDbPending; await saveChat(chat); } }
+  if (rebuild && restart) { delete chat.narrativeDbPending; await saveChat(chat); }
   const working = rebuild ? structuredClone(pendingRebuild || { text: '', covered: 0, checkpoints: [] }) : {
     text: old?.text || '', covered: start, checkpoints: [...(old?.checkpoints || [])],
   };
@@ -769,13 +782,16 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
       if (working.covered >= chat.messages.length) { succeeded = true; break; }
     }
     if (succeeded && !S.dbCancel) {
-      if (rebuild) { chat.narrativeDb = structuredClone(working); delete chat.narrativeDbPending; delete chat.narrativeDbLastError; await saveChat(chat); }
+      if (rebuild) { chat.narrativeDb = structuredClone(working); delete chat.narrativeDbPending; delete chat.narrativeDbLastError; delete chat.narrativeDbErrorBatch; await saveChat(chat); }
+      else if (chat.narrativeDbLastError) { delete chat.narrativeDbLastError; delete chat.narrativeDbErrorBatch; await saveChat(chat); }
       if (!silent) toast('Narrative Database updated.');
     } else if (S.dbCancel && !silent) toast('Catch-up paused. Resume from last checkpoint.');
   } catch (e) {
     console.error('Narrative Database error', e);
-    if (rebuild) { chat.narrativeDbLastError = String(e.message || e); try { await saveChat(chat); } catch (saveError) { console.error('Could not save rebuild error', saveError); } }
-    toast('Narrative Database: ' + (e.message || e) + (rebuild ? ' — resume from the last saved checkpoint.' : ''), 8000);
+    chat.narrativeDbLastError = String(e.message || e);
+    chat.narrativeDbErrorBatch = (S.dbProgress?.done || 0) + 1;
+    try { await saveChat(chat); } catch (saveError) { console.error('Could not save database error', saveError); }
+    toast('Narrative Database stopped: ' + (e.message || e) + ' (error saved in Narrative Database settings)', 8000);
   } finally {
     S.dbBusy = false; S.dbProgress = null; S.dbCancel = false;
     updateDatabaseBanner();
@@ -4306,6 +4322,15 @@ const actions = {
   'qa-memory': memorySheet,
   'qa-database': databaseSheet,
   'ndb-update': () => runDatabase(S.chat, { flush: true }),
+  'ndb-dismiss-error': async () => {
+    if (!S.chat) return;
+    delete S.chat.narrativeDbLastError;
+    delete S.chat.narrativeDbErrorBatch;
+    await saveChat(S.chat);
+    updateDatabaseBanner();
+    if ($('#ndb-sheet')) databaseSheet();
+  },
+  'ndb-retry': () => runDatabase(S.chat, { rebuild: true, flush: true, restart: true }),
   'ndb-resume': () => {
     const chat = S.chat;
     const partial = chat.narrativeDbPending;
@@ -4322,7 +4347,7 @@ const actions = {
   'ndb-cancel': () => { S.dbCancel = true; toast('Cancel requested — stopping after current API call.'); },
   'ndb-clear': async () => {
     if (!confirm('Clear Narrative Database for this chat? Chat messages and other memory systems remain untouched.')) return;
-    delete S.chat.narrativeDb; delete S.chat.narrativeDbPending; delete S.chat.narrativeDbLastError;
+    delete S.chat.narrativeDb; delete S.chat.narrativeDbPending; delete S.chat.narrativeDbLastError; delete S.chat.narrativeDbErrorBatch; delete S.chat.narrativeDbErrorBatch;
     await saveChat(S.chat); databaseSheet();
   },
   'ndb-save': async () => {

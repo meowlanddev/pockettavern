@@ -538,3 +538,9 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
   .ndb-current-batch { animation: none; }
   .ndb-progress-fill { transition: none; }
 }
+
+/* Persistent Narrative Database errors remain visible after a failed request. */
+.ndb-running-banner.ndb-error { border-left: 3px solid var(--danger, #e66); }
+.ndb-error-title { font-weight: 700; margin-bottom: 5px; }
+.ndb-error-message { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .87em; margin-bottom: 5px; }
+.ndb-error-meta { color: var(--muted); font-size: .78em; margin-bottom: 8px; }

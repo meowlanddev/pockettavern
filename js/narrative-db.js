@@ -163,6 +163,8 @@ export function buildUpdateInput(previous, batch, speaker) {
 
 export function checkedDatabase(text) {
   const result = String(text || '').trim().replace(/^```(?:markdown|md)?\s*\n/i, '').replace(/\n```\s*$/, '').trim();
-  if (!result || !['ACTIVE THEATRE','ENTITY DOSSIERS','THE WEB','WORLD MECHANICS','THE LEDGER','THE CHRONICLE','Recent Log'].every(x => result.includes(x))) throw new Error('Database response missing required sections; previous version was retained.');
+  const required = ['ACTIVE THEATRE','ENTITY DOSSIERS','THE WEB','WORLD MECHANICS','THE LEDGER','THE CHRONICLE','Recent Log'];
+  const missing = required.filter(x => !result.includes(x));
+  if (!result || missing.length) throw new Error('Database response missing required sections: ' + (missing.length ? missing.join(', ') : 'empty response') + '. Previous version was retained.');
   return result;
 }
