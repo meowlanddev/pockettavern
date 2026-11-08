@@ -182,13 +182,11 @@ function openaiBody(conn, preset, messages) {
   if (preset.min_p > 0) body.min_p = preset.min_p;
   if (preset.repetition_penalty && preset.repetition_penalty !== 1) body.repetition_penalty = preset.repetition_penalty;
   if (conn.provider === 'openrouter') {
-    // Reasoning models on OpenRouter send their thinking by default. With "show
-    // reasoning" off, ask for it to be left out (the model still thinks).
-    const reasoning = {};
-    if (['low', 'medium', 'high'].includes(preset.claude_effort)) reasoning.effort = preset.claude_effort;
-    if (preset.show_thoughts) body.include_reasoning = true;
-    else reasoning.exclude = true;
-    if (Object.keys(reasoning).length) body.reasoning = reasoning;
+    // Same as SillyTavern: include_reasoning follows "show reasoning" (false asks
+    // OpenRouter to leave the thinking out without turning thinking on), and an
+    // effort is only sent when one is chosen (Auto = the model's own default).
+    body.include_reasoning = !!preset.show_thoughts;
+    if (['low', 'medium', 'high'].includes(preset.claude_effort)) body.reasoning = { effort: preset.claude_effort };
   }
   return body;
 }
