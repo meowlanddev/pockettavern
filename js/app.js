@@ -787,7 +787,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
         // Do not advance coverage or overwrite the checkpoint on a failed retry.
         let continuity = NDB.continuityWarnings(working.text, result, batch.messages);
         if (continuity.length) {
-          const retryInput = input + '\\n\\n<continuity_review>\\nThe previous draft may have lost important established continuity. Check these items against the original messages and previous database; preserve accurate facts, but honor explicit corrections and genuine resolutions. Return the entire corrected database, not a patch:\\n- ' + continuity.join('\\n- ') + '\\n</continuity_review>';
+          const retryInput = input + '\n\n<continuity_review>\nThe previous draft may have lost important established continuity. Check these items against the original messages and previous database; preserve accurate facts, but honor explicit corrections and genuine resolutions. Return the entire corrected database, not a patch:\n- ' + continuity.join('\n- ') + '\n</continuity_review>';
           result = validate(await memCall(system, retryInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
           continuity = NDB.continuityWarnings(working.text, result, batch.messages);
           if (continuity.length) throw new Error('Continuity review still flags possible omissions: ' + continuity.join('; ').slice(0, 700) + '. Previous checkpoint retained; review or retry.');
