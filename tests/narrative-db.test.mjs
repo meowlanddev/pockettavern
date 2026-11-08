@@ -68,14 +68,14 @@ const renamed = mk('**Catrin**\n- Waiting.', '', '- **Abandoned timeline:** Levi
 assert.deepEqual(DB.continuityWarnings(origin, renamed), [], 'timeline rename is not memory loss');
 assert(DB.continuityWarnings(origin, mk('**Catrin**\n- Waiting.', '', 'Unrelated scene.')).some(x => x.includes('timeline branch')), 'missing timeline still warns');
 
-const qualified = mk('**Jason Todd (timeline left behind)**
+const qualified = mk(`**Jason Todd (timeline left behind)**
 - Remembers the erased branch.
 **Damian Wayne (timeline left behind)**
-- Was there.', '', '- **Abandoned timeline:** Their earlier history remains recorded.');
-const renamedDossiers = mk('**Jason Todd — abandoned timeline**
+- Was there.`, '', '- **Abandoned timeline:** Their earlier history remains recorded.');
+const renamedDossiers = mk(`**Jason Todd — abandoned timeline**
 - Remembers the erased branch.
 **Damian Wayne — abandoned timeline**
-- Was there.', '', '- **Abandoned timeline:** Their earlier history remains recorded.');
+- Was there.`, '', '- **Abandoned timeline:** Their earlier history remains recorded.');
 assert.deepEqual(DB.continuityWarnings(qualified, renamedDossiers), [], 'timeline-qualified dossier renames are allowed');
-assert(DB.continuityWarnings(qualified, mk('**Jason Todd**
-- Remembers the erased branch.', '', '- **Abandoned timeline:** Their earlier history remains recorded.')).some(x => x.includes('Damian Wayne')), 'a genuinely missing character still warns');
+assert(DB.continuityWarnings(qualified, mk(`**Jason Todd**
+- Remembers the erased branch.`, '', '- **Abandoned timeline:** Their earlier history remains recorded.')).some(x => x.includes('Damian Wayne')), 'a genuinely missing character still warns');
