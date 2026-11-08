@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.17)';
+const VERSION = '1.9.9.0 (0.18)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -679,6 +679,19 @@ function updateDatabaseBanner() {
     else if (errorHtml) el.innerHTML = errorHtml;
     else el.replaceChildren();
   }
+}
+async function openDatabaseManager() {
+  // Settings can be opened before any chat has been loaded this session.
+  if (S.chat) return databaseSheet();
+  const chats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  if (!chats.length) return toast('Open a chat first to manage its Narrative Database.', 5000);
+  openSheet(`
+    <div class="sheet-title">Choose a chat to manage</div>
+    <p class="hint">Narrative Databases are saved per chat. Select one to open its manager.</p>
+    <div class="chat-list">
+      ${chats.map((c) => `<button class="btn block" data-action="ndb-select-chat" data-id="${esc(c.id)}">${esc(c.title || 'Untitled chat')}</button>`).join('')}
+    </div>
+  `, 'tall');
 }
 function databaseSheet() {
   const chat = S.chat;
@@ -4321,7 +4334,13 @@ const actions = {
   'restore-draft': () => { closeSheet(); restoreDraft(); },
   'qa-summary': summarySheet,
   'qa-memory': memorySheet,
-  'qa-database': databaseSheet,
+  'qa-database': openDatabaseManager,
+  'ndb-select-chat': async (el) => {
+    const chat = await db.get('chats', el.dataset.id);
+    if (!chat) return toast('That chat could not be found.', 5000);
+    S.chat = chat;
+    databaseSheet();
+  },
   'ndb-update': () => runDatabase(S.chat, { flush: true }),
   'ndb-dismiss-error': async () => {
     if (!S.chat) return;
