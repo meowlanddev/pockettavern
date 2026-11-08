@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.20)';
+const VERSION = '1.9.9.0 (0.21)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -772,7 +772,12 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
       const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} });
       const priorSignature = NDB.fingerprint(chat.messages, batch.end);
       const batchStartedAt = Date.now();
-      const result = NDB.checkedDatabase(await memCall(system, input, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+      let result;
+      try {
+        result = NDB.checkedDatabase(await memCall(system, input, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+      } catch (err) {
+        throw new Error(`Messages ${working.covered + 1}–${batch.end}: ${err.message || err}`);
+      }
       const batchSeconds = Math.round((Date.now() - batchStartedAt) / 1000);
       // Do not mark a batch covered if its original messages changed during generation.
       const signature = NDB.fingerprint(chat.messages, batch.end);
@@ -3449,8 +3454,8 @@ function renderSettingsView(open) {
     <details class="section"><summary>Database update prompt and injection template</summary><div class="sec-body">
       <label class="field"><span class="label">Complete database update prompt</span><textarea rows="12" data-ext-ndb="prompt">${esc(nd.prompt)}</textarea></label>
       <label class="field"><span class="label">Injection template (use {{database}})</span><textarea rows="3" data-ext-ndb="template">${esc(nd.template)}</textarea></label>
-      <button class="btn" data-action="ndb-reset-prompt">Restore default update prompt (0.20 · same 0.14 prompt)</button>
-      <p class="hint">Version 0.20 keeps the exact restored 0.14 update prompt. The validator now permits an empty Recent Log and rejects incomplete references to prior database content before saving a checkpoint. Saved custom prompts are unchanged.</p>
+      <button class="btn ndb-reset-prompt-btn" data-action="ndb-reset-prompt">Restore default update prompt (0.21 · same 0.14 prompt)</button>
+      <p class="hint">Version 0.21 keeps the exact restored 0.14 update prompt. Validation rejects standalone "unchanged" placeholders, identifies the affected message range, and retains the last good checkpoint. The Recent Log may be empty. Saved custom prompts are unchanged.</p>
     </div></details>
     <div id="ndb-settings-progress" class="ndb-running-banner" hidden></div>
     <button class="btn ndb-manage-btn" data-action="qa-database">Manage Narrative Database / Rebuild from Chat History</button>

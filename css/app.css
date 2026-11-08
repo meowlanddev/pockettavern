@@ -546,7 +546,7 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .ndb-error-meta { color: var(--muted); font-size: .78em; margin-bottom: 8px; }
 
 /* Keep the long Narrative Database manager label readable on narrow screens. */
-.ndb-manage-btn {
+.ndb-manage-btn, .ndb-reset-prompt-btn {
   white-space: normal;
   text-align: center;
   line-height: 1.35;
@@ -556,5 +556,5 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
   min-height: 44px;
 }
 @media (max-width: 640px) {
-  .ndb-manage-btn { display: flex; width: 100%; }
+  .ndb-manage-btn, .ndb-reset-prompt-btn { display: flex; width: 100%; justify-content: center; }
 }

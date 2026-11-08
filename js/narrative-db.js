@@ -190,10 +190,14 @@ export function checkedDatabase(text) {
   // omitted from the output, not compact statements of actual facts.
   const placeholder = result.split('\n').find(line => {
     const value = line.trim().replace(/^[-*]\s*/, '').replace(/^\*\*[^*]+\*\*\s*[:—-]?\s*/, '').trim();
+    // Strip list markers and optional Markdown field labels before examining
+    // the actual field content. "The passcode is unchanged" is a valid fact;
+    // a field consisting only of "Unchanged this exchange" is not.
+    const naked = value.replace(/^\*\*[^*]+\*\*\s*[:—-]?\s*/, '').trim();
     return /\b(?:unchanged from (?:the )?(?:prior|previous|earlier|old) database|(?:see|refer to|same as) (?:the )?(?:prior|previous|earlier|old) database|all prior (?:knowledge|details|history|facts) retained|(?:all )?(?:prior|previous|earlier) (?:details|history|entries|information|facts) (?:remain )?unchanged)\b/i.test(line)
-      || /^(?:(?:[^:]{1,90}):\s*)?(?:unchanged|same as (?:before|above)|as (?:before|previously)|no changes)(?:\s*[.!])?$/i.test(value);
+      || /^(?:unchanged(?:\s+(?:this (?:exchange|scene|turn|update|batch)|since (?:last|previous) (?:update|scene)|from (?:before|previously)))?|same as (?:before|above|previously)|as (?:before|previously)|no (?:new )?changes|(?:nothing|no updates) to (?:add|report))(?:\s*[.!])?$/i.test(naked);
   });
-  if (placeholder) throw new Error('Database response contains a reference to omitted earlier memory: ' + placeholder.trim().slice(0, 150) + '. Previous checkpoint was retained; resume to retry this batch.');
+  if (placeholder) throw new Error('Database response has an incomplete-memory placeholder: "' + placeholder.trim().slice(0, 180) + '". Previous checkpoint retained; resume to retry this batch.');
 
   // Recent Log is an optional zero-to-three-item handoff. Normalize absent
   // headings instead of rejecting an otherwise complete response.
