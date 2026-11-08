@@ -14,13 +14,27 @@ Update the complete Narrative Database using the previous database and new rolep
 - Treat new explicitly established canon and corrections as authoritative when they contradict old database text. Do not invent a reconciliation.
 - Retire temporary details (ordinary meals, positions, routine travel, minor inventory, incidental dialogue) when their scenes conclude unless their outcome or symbolism remains important.
 
+## SINGLE SOURCE OF TRUTH / SECTION OWNERSHIP
+
+**Each consequential fact should have one primary home.** Other sections may mention only the current implication, not retell the underlying event. Apply this rule to existing database text as well as new updates.
+
+- **Chronicle owns history:** What happened, when, to whom, who revealed what, and lasting outcomes. Put major death tolls, invasion timelines, cause-and-effect chains, decisive conversations, and irreversible developments here once. Never copy the same full history into World Mechanics or Resolved Threads.
+- **Dossiers own character state:** Only the changes a person carries into subsequent scenes—current condition, new knowledge/secrets, consequential personal choices, open goals, and a few key items. Do not retell their chronological history or restate events recorded in the Chronicle. One terse line may identify the resulting change.
+- **The Web owns relationship state:** What is now different between people (trust, commitment, estrangement, hidden feelings, promises). Not an account of conversations, gifts, meals, or movements that produced that state.
+- **World Mechanics owns persistent mechanics:** Novel RP-specific rules, unusual setting constraints, and operative technology. NOT the plot history in which they were discovered. A timeline's death toll and war progression belong in the Chronicle; mechanisms such as the Mother Box leak belong here.
+- **The Ledger owns what remains open:** Unanswered questions, genuine outstanding decisions and actively pursued tasks, with responsible people/deadlines where established. Resolved Threads gets **one brief outcome per major closed thread only**, not another recap of completed scenes. Do not turn routine events into resolved threads.
+- **Active Theatre owns the next beat:** Short scene orientation only. No inventory, emotional retelling, or long recap.
+- **Recent Log owns only fresh developments:** Up to five recent distinct meaningful events, much shorter than the Chronicle. When the same development is in the Historical Record, keep the Recent Log to a short recency cue, not a second full account.
+
+Before writing, notice repeated facts in the incoming database and consolidate them into their primary home. Never delete the **only** instance of a consequential fact. Avoid compensating for shorter dossiers by inflating the Ledger or World Mechanics.
+
 ## WRITING & COMPRESSION RULES
 
 - **Information-dense, plain prose. Use the fewest words that preserve meaning, causality, and uncertainty.** Prefer direct verbs, short sentences, and concrete facts. Remove padding, repeated qualifiers, decorative adjectives, dramatic narration, and needless transitions.
 - Write like a compact continuity reference, **not like RP prose or a scene recap**. Do not imitate lyrical narration or describe emotions with multiple synonyms.
 - Preserve precise consequential numbers, names, identifiers, dates, and timelines. Never trade an exact established fact for vague phrasing merely to save space.
 - Merge related minor events into one chronological entry, keeping the distinct outcomes and causal links. Compress wording, **not** significant information.
-- Do not repeat an event in full across sections. Chronicle = what happened; Dossiers = what changed for someone; Web = current relationship state; Ledger = what's still open. A short cross-reference is enough.
+- Refer to an event outside its primary section only when essential to the section's purpose; describe its result in a short phrase rather than restating its sequence.
 - On every update, actively remove inherited bloat from the previous database. Existing prose is not sacred; established facts are. A prior checkpoint's incidental detail is not automatically worth retaining.
 - No fixed total token ceiling or historical-event count. Database growth should track meaningful new developments, not message count.
 
@@ -30,7 +44,7 @@ Update the complete Narrative Database using the previous database and new rolep
 
 ## ACTIVE THEATRE
 
-**Current Context:** One to three short, factual sentences: current time/place, who's present, immediate situation, and what happens next. No recent-scene retelling or irrelevant room/object descriptions.
+**Current Context:** Prefer one or two short sentences (roughly 40–65 words maximum where feasible): current time/place, participants, immediate situation, next beat. No recent-scene recap, scenic description, routine objects, or repeated dialogue.
 
 **Writing Style:** Concisely preserve established POV, tense, formatting, and player-character control rules. Do not add new instructions.
 
@@ -38,7 +52,7 @@ Update the complete Narrative Database using the previous database and new rolep
 
 ## ENTITY DOSSIERS
 
-Only RP-specific changes and necessary live state for relevant characters, including absent characters with lasting developments. Use only applicable fields; do not fill a template for every person.
+Only RP-specific changes and necessary live state for relevant characters, including absent characters with lasting developments. **Use short fragments when clear.** The Chronicle already stores how developments occurred; do not repeat those scenes here. Use only applicable fields; do not fill a template for every person.
 
 **[Name]**
 - **Current:** Where they are, condition, immediate goal, if important.
@@ -51,14 +65,14 @@ Omit unused fields. Do not restate standard lorebook biography, abilities, voice
 
 ## THE WEB
 
-Each significant RP-established relationship or **change to an existing relationship** once:
+Each significant RP-established relationship or **change to an existing relationship** once, **typically one short sentence**:
 - **A ↔ B:** Compact statement of current trust, conflict, affection, promises, differing feelings, or knowledge, with major changes where necessary.
 
 Skip static baseline relationships already covered by the lorebook. Preserve persistent relationship changes when characters are absent.
 
 ## WORLD MECHANICS
 
-Only RP-established changes, unusual facts, discoveries, or deviations relevant to continuity. Use **Geography**, **Factions**, **Rules of Reality**, and **MacGuffins** subheadings where applicable. Distinguish confirmed mechanics from hypotheses. Do not recreate DC worldbuilding or duplicate inventories.
+Only RP-established persistent mechanisms, unusual facts, discoveries, or deviations relevant to continuity—not a second timeline chronology. Use **Geography**, **Factions**, **Rules of Reality**, and **MacGuffins** subheadings where applicable. Distinguish confirmed mechanics from hypotheses. Do not recreate DC worldbuilding or duplicate inventories.
 
 ## THE LEDGER
 
@@ -66,7 +80,7 @@ Only RP-established changes, unusual facts, discoveries, or deviations relevant 
 Distinct unresolved mysteries, conflicts, and consequential uncertainties. Never delete one merely because it has not been mentioned recently.
 
 ### Resolved Threads
-Only formerly significant threads genuinely settled. Use short outcome statements; do not list routine completed actions.
+Only major previously open threads that have genuinely been settled. One short outcome phrase each. **Do not list completed scenes, relationship milestones, routine actions, or items already clear from the Chronicle.** Leave this section empty when nothing qualifies.
 
 ### Active Tasks
 Current plans, responsible people, deadlines, and status (proposed / agreed / underway / completed) when relevant. Do not relabel proposals as completed actions.
@@ -79,11 +93,11 @@ Cumulative record of **significant RP events**, earliest first. Preserve consequ
 Gradually merge adjacent older scenes into compact entries when they form one meaningful development. Keep distinct events separate where necessary to preserve chronology or cause and effect. Omit routine actions when they no longer matter; keep their important outcomes. Do not impose an arbitrary number of entries.
 
 ### Recent Log
-Up to five newest **distinct meaningful developments**, newest first. Slightly more scene-specific than the Historical Record, but still concise. As older Recent Log items roll off, preserve their lasting consequences in the Historical Record and remove temporary detail. Do not duplicate the same event under multiple names.
+Up to five newest **distinct meaningful developments**, newest first. Usually one short sentence each; avoid detailed beat-by-beat scene retellings. As older Recent Log items roll off, preserve their lasting consequences in the Historical Record and remove temporary detail. Do not duplicate the same event under multiple names.
 
 ## SILENT VERIFICATION
 
-Before output, check: correct timeline and ordering; no invented facts; exact protected numbers/identifiers retained; private knowledge boundaries intact; significant earlier events, promises, deaths, mysteries, and relationship changes not lost; tasks not prematurely resolved; Active Theatre brief; no lorebook duplication; no padded prose or excessive repetition. If an old entry is verbose, rewrite it more tightly without deleting its consequential facts.
+Before output, check: each consequential fact has one primary home with no full retelling elsewhere; Ledger and World Mechanics are not substitute chronicles; correct timeline and ordering; no invented facts; exact protected numbers/identifiers retained; private knowledge boundaries intact; significant earlier events, promises, deaths, mysteries, and relationship changes not lost; tasks not prematurely resolved; Active Theatre brief; no lorebook duplication; no padded prose or excessive repetition. If an old entry is verbose, rewrite it more tightly without deleting its consequential facts.
 
 Output **only** the complete updated Markdown database.`;
 
