@@ -774,13 +774,21 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
       const batchStartedAt = Date.now();
       let result;
       try {
-        result = NDB.checkedDatabase(await memCall(system, input, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+        // Retry a malformed replacement once without advancing the checkpoint.
+        // Keep the saved 0.14 system prompt untouched; only annotate this call.
+        const validate = raw => NDB.checkedDatabase(raw);
+        try {
+          result = validate(await memCall(system, input, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+        } catch (validationError) {
+          const repairInput = input + '\\n\\n<database_repair>\\nThe previous replacement was rejected: ' + String(validationError.message || validationError).slice(0, 500) + '\\nReturn a FULL standalone database with every required section. Replace shorthand such as "unchanged", "no change; see Chronicle", and "same as before" with concrete facts from the previous database. Do not omit prior facts merely because they were not mentioned in the new messages.\\n</database_repair>';
+          result = validate(await memCall(system, repairInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+        }
         // 0.22: retry once when the replacement appears to lose protected continuity.
         // Do not advance coverage or overwrite the checkpoint on a failed retry.
         let continuity = NDB.continuityWarnings(working.text, result, batch.messages);
         if (continuity.length) {
-          const retryInput = input + '\n\n<continuity_review>\nThe previous draft may have lost important established continuity. Check these items against the original messages and previous database; preserve accurate facts, but honor explicit corrections and genuine resolutions. Return the entire corrected database, not a patch:\n- ' + continuity.join('\n- ') + '\n</continuity_review>';
-          result = NDB.checkedDatabase(await memCall(system, retryInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+          const retryInput = input + '\\n\\n<continuity_review>\\nThe previous draft may have lost important established continuity. Check these items against the original messages and previous database; preserve accurate facts, but honor explicit corrections and genuine resolutions. Return the entire corrected database, not a patch:\\n- ' + continuity.join('\\n- ') + '\\n</continuity_review>';
+          result = validate(await memCall(system, retryInput, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
           continuity = NDB.continuityWarnings(working.text, result, batch.messages);
           if (continuity.length) throw new Error('Continuity review still flags possible omissions: ' + continuity.join('; ').slice(0, 700) + '. Previous checkpoint retained; review or retry.');
         }
