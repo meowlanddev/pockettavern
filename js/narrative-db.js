@@ -3,135 +3,89 @@
 // the next chronological segment of original messages. No LLM calls here.
 export const DEFAULT_DATABASE_PROMPT = `# ROLEPLAY DATABASE UPDATE
 
-Update the existing narrative database using the latest roleplay text. Preserve canon, continuity, character knowledge, relationships, and unresolved plot threads.
+Update the complete Narrative Database using the previous database and new roleplay messages. Output the entire updated database, not a patch. This is memory of **events and discoveries in this specific RP**, not a second character card or lorebook.
 
-**Accuracy matters more than detail. Never invent facts to fill gaps. Keep each section at the level of detail its purpose requires.**
+## NON-NEGOTIABLE RULES
 
-## CORE RULES
+- Preserve consequential facts and their exact supported details even when they are no longer relevant to the current scene. A death toll, secret, discovery, promise, relationship turning point, irreversible choice, deadline, or unresolved mystery does not expire because it is old.
+- Distinguish what actually happened, what a character reported, what they believe or suspect, what remains unknown, and who knows each fact. Do not invent facts or silently promote conjecture to canon.
+- Do not reproduce baseline lore: established personalities, voices, skills, affiliations, appearance, backstories, generic locations, and franchise/world rules belong to cards and lorebooks. **Exception:** record a pre-existing fact when its revelation, contradiction, or use has a consequential effect in this RP.
+- Preserve user control of the player character, established POV/tense/formatting instructions, timeline distinctions, and unresolved continuity.
+- Treat new explicitly established canon and corrections as authoritative when they contradict old database text. Do not invent a reconciliation.
+- Retire temporary details (ordinary meals, positions, routine travel, minor inventory, incidental dialogue) when their scenes conclude unless their outcome or symbolism remains important.
 
-* Use the existing database, supplied roleplay, and explicit user corrections as sources. New explicit canon overrides older contradictions.
-* Every claim must be supported. Do not invent lore, motives, diagnoses, equipment, abilities, affiliations, relationships, timelines, or outcomes.
-* Separate established facts from character beliefs, suspicions, theories, and unknowns. Attribute uncertain claims to their source.
-* Never turn a character's experience into an objective rule, a belief into a fact, or an inability demonstrated so far into proof of impossibility.
-* Do not add exact durations or precision unless clearly supported and useful to continuity.
-* Track who knows each fact or secret. Witnessing an event does not prove understanding its cause. Never assume a private conversation was shared.
-* Distinguish plans from agreements, attempts, and completed actions. Distinguish temporary compliance from genuine consent.
-* Keep every section consistent. Update current states to the latest scene while preserving relevant absent characters, history, secrets, and relationships.
-* Be concise in summaries and reference sections, but do not compress narrative history until meaningful events or their progression are lost.
-* Preserve established roleplay-writing instructions and character-control boundaries.
+## WRITING & COMPRESSION RULES
 
-## REQUIRED STRUCTURE
+- **Information-dense, plain prose. Use the fewest words that preserve meaning, causality, and uncertainty.** Prefer direct verbs, short sentences, and concrete facts. Remove padding, repeated qualifiers, decorative adjectives, dramatic narration, and needless transitions.
+- Write like a compact continuity reference, **not like RP prose or a scene recap**. Do not imitate lyrical narration or describe emotions with multiple synonyms.
+- Preserve precise consequential numbers, names, identifiers, dates, and timelines. Never trade an exact established fact for vague phrasing merely to save space.
+- Merge related minor events into one chronological entry, keeping the distinct outcomes and causal links. Compress wording, **not** significant information.
+- Do not repeat an event in full across sections. Chronicle = what happened; Dossiers = what changed for someone; Web = current relationship state; Ledger = what's still open. A short cross-reference is enough.
+- On every update, actively remove inherited bloat from the previous database. Existing prose is not sacred; established facts are. A prior checkpoint's incidental detail is not automatically worth retaining.
+- No fixed total token ceiling or historical-event count. Database growth should track meaningful new developments, not message count.
+
+## REQUIRED OUTPUT
 
 # NARRATIVE
 
 ## ACTIVE THEATRE
 
-**Current Context:** Briefly summarize the current location, present characters, immediate situation, active conflict, stakes, and latest consequential action. Aim for 2–4 sentences. Include only what is needed to understand the current scene.
+**Current Context:** One to three short, factual sentences: current time/place, who's present, immediate situation, and what happens next. No recent-scene retelling or irrelevant room/object descriptions.
 
-**Writing Style:** Preserve established point of view, tense, formatting, character-control rules, and essential roleplay instructions. Keep concise without dropping instructions that govern how the story is written.
+**Writing Style:** Concisely preserve established POV, tense, formatting, and player-character control rules. Do not add new instructions.
 
-**Story Tone:** One brief sentence describing the established tone and current atmosphere. Avoid repeating the Current Context.
+**Story Tone:** A few words or one brief sentence. Do not recap the scene.
 
 ## ENTITY DOSSIERS
 
-Maintain relevant dossiers for present and absent characters. This section's existing level of detail is intentional: preserve useful character-specific information rather than aggressively shortening it.
+Only RP-specific changes and necessary live state for relevant characters, including absent characters with lasting developments. Use only applicable fields; do not fill a template for every person.
 
 **[Name]**
+- **Current:** Where they are, condition, immediate goal, if important.
+- **Developments:** Consequential things they did, learned, suffered, decided, confessed, or changed during this RP. Do not retell full events already recorded in the Chronicle.
+- **Knowledge / Secrets:** What they know, suspect, or do not know; maintain private knowledge boundaries.
+- **Open:** Unresolved personal objective or consequence, if any.
+- **Key Items:** Only evidence, objects, or possessions with continuing plot relevance.
 
-* **Status:** Current location and confirmed condition.
-* **Loadout:** Confirmed possessions and equipment.
-* **Skillset:** Demonstrated abilities and confirmed limits.
-* **Standing:** Established roles and affiliations.
-* **Background:** Essential history.
-* **Drive:** Supported motivations and priorities; attribute interpretations.
-* **Objective:** Current goals and plans, distinguishing intention, inference, hope, and commitment.
-* **Classified:** Secrets and knowledge boundaries.
-
-Use only useful fields. Do not invent missing details or give characters knowledge they have not acquired. Preserve meaningful history, characterization, and distinctions between what a character knows, believes, feels, and intends. Update only what the new roleplay changes; do not rewrite or discard established information without reason.
+Omit unused fields. Do not restate standard lorebook biography, abilities, voice, personality, or exhaustive inventories. Give central characters enough detail to preserve their evolving story, but do not give each character equal space.
 
 ## THE WEB
 
-List each significant established relationship exactly once, including relationships between absent characters. Preserve the existing concise style and level of detail.
+Each significant RP-established relationship or **change to an existing relationship** once:
+- **A ↔ B:** Compact statement of current trust, conflict, affection, promises, differing feelings, or knowledge, with major changes where necessary.
 
-Format:
-
-* **A ↔ B:** One brief sentence describing their current relationship.
-
-Distinguish each person's feelings when they differ. Include meaningful changes in trust, conflict, loyalty, affection, or knowledge. Avoid scene recaps, unsupported interpretations, and numerical scores. Do not remove established relationships merely because the characters were absent from the latest scene.
+Skip static baseline relationships already covered by the lorebook. Preserve persistent relationship changes when characters are absent.
 
 ## WORLD MECHANICS
 
-Keep this section compact and reference-oriented.
-
-**Geography:** Confirmed locations and essential differences between worlds.
-
-**Factions:** Established groups and affiliations relevant to continuity.
-
-**Rules of Reality:** Confirmed mechanics, abilities, and limitations. Attribute unverified explanations and beliefs to their source.
-
-**MacGuffins:** Important objects, devices, evidence, and their known status.
-
-Include only information useful for understanding the setting or continuing the story. Do not repeat character biographies, recap events, add franchise lore, or infer universal rules from isolated incidents. Preserve important uncertainty in a few precise words.
+Only RP-established changes, unusual facts, discoveries, or deviations relevant to continuity. Use **Geography**, **Factions**, **Rules of Reality**, and **MacGuffins** subheadings where applicable. Distinguish confirmed mechanics from hypotheses. Do not recreate DC worldbuilding or duplicate inventories.
 
 ## THE LEDGER
 
-Keep lists focused. Each item should capture a distinct open question, resolved plot thread, or actionable task—not retell the story.
-
 ### Unresolved Threads
-
-List significant unanswered questions, mysteries, conflicts, and unsettled decisions. Merge overlapping questions only when no distinct unknown is lost. Preserve partially unresolved mysteries. Do not list matters that are genuinely settled.
+Distinct unresolved mysteries, conflicts, and consequential uncertainties. Never delete one merely because it has not been mentioned recently.
 
 ### Resolved Threads
-
-Include only previously meaningful questions, conflicts, or objectives that are now genuinely resolved. Ordinary events—rescue, treatment, waking, or learning a fact—are not automatically resolved threads. A character's belief does not resolve an objective question. If only part of a mystery is settled, keep the remainder unresolved.
+Only formerly significant threads genuinely settled. Use short outcome statements; do not list routine completed actions.
 
 ### Active Tasks
-
-List concrete actions, responsible characters, and actual status where known. Distinguish proposed, contested, agreed, ongoing, completed, and abandoned. Keep each task brief. Do not duplicate an unresolved question unless a distinct action is being taken to address it.
+Current plans, responsible people, deadlines, and status (proposed / agreed / underway / completed) when relevant. Do not relabel proposals as completed actions.
 
 ## THE CHRONICLE
 
-This section is the cumulative narrative record. It must preserve the story's meaningful progression, not merely provide a skeletal list of plot milestones. Do not sacrifice its usefulness to make the database shorter.
-
 ### Historical Record
+Cumulative record of **significant RP events**, earliest first. Preserve consequential outcomes, causality, revelations, timeline branches, exact stakes, and lasting character or relationship developments indefinitely. A devastating death toll or crucial revelation remains even if it does not affect the next scene.
 
-Record consequential events in chronological order, earliest first. Aim for roughly 10–15 entries when appropriate, but this is a guideline, not a limit. Use as many entries as necessary to preserve the important history.
-
-Each entry should explain what happened and, where relevant, what it changed: a discovery, decision, relationship, shift in trust, change in character knowledge, new danger, or consequence. Include enough context for the event to remain understandable without rereading the roleplay.
-
-Do not reduce complex sequences to vague summaries. Preserve causal links and meaningful intermediate steps. Merge events only when their order and significance remain clear. Compress wording rather than removing consequential details. Do not discard older events merely to meet a target count.
+Gradually merge adjacent older scenes into compact entries when they form one meaningful development. Keep distinct events separate where necessary to preserve chronology or cause and effect. Omit routine actions when they no longer matter; keep their important outcomes. Do not impose an arbitrary number of entries.
 
 ### Recent Log
+Up to five newest **distinct meaningful developments**, newest first. Slightly more scene-specific than the Historical Record, but still concise. As older Recent Log items roll off, preserve their lasting consequences in the Historical Record and remove temporary detail. Do not duplicate the same event under multiple names.
 
-List the five newest distinct events, newest first, when available. If fewer than five are established, list fewer. Each entry should summarize a meaningful beat in enough detail to preserve what happened and its immediate significance.
+## SILENT VERIFICATION
 
-Verify event order against the supplied roleplay. Do not confuse the order in which events are mentioned with their chronological order. When several actions form one continuous scene or exchange, summarize them together if that better preserves their meaning. Do not split one event into artificial entries or repeat the same event in different wording.
+Before output, check: correct timeline and ordering; no invented facts; exact protected numbers/identifiers retained; private knowledge boundaries intact; significant earlier events, promises, deaths, mysteries, and relationship changes not lost; tasks not prematurely resolved; Active Theatre brief; no lorebook duplication; no padded prose or excessive repetition. If an old entry is verbose, rewrite it more tightly without deleting its consequential facts.
 
-The newest entry must reflect the latest consequential event. Check that the log agrees with the Historical Record, current context, character knowledge, and Ledger. Keep the Recent Log focused on recent events; do not use it as a replacement for the cumulative Historical Record.
-
-## SILENT FINAL CHECK
-
-Before responding, verify:
-
-1. No unsupported facts, timelines, motives, or setting details were added.
-2. Facts, beliefs, theories, and unknowns remain distinct.
-3. Character knowledge and secrets are consistent across all sections.
-4. Current context reflects the latest scene without unnecessary recap.
-5. Entity Dossiers preserve meaningful character information and established detail.
-6. Every significant established relationship is retained exactly once.
-7. World Mechanics and Ledger are concise without losing important uncertainty or open threads.
-8. Historical Record preserves consequential events, their causal links, and meaningful progression without arbitrary truncation.
-9. Recent Log is genuinely newest-first, contains distinct events, and provides enough context to remain useful.
-10. No exact claim is more precise or certain than the source supports.
-11. No established canon was dropped merely because it was absent from the latest scene.
-12. Roleplay-writing instructions and character-control boundaries remain intact.
-13. No section contradicts another.
-
-Do not output this checklist.
-
-## OUTPUT
-
-Output only the complete updated database. No preamble, commentary, change summary, or audit. Keep Active Theatre, World Mechanics, and Ledger compact; preserve the established detail of Entity Dossiers and The Web; and give the Chronicle enough space to accurately preserve narrative continuity. Accuracy and useful continuity take priority over arbitrary brevity.`;
+Output **only** the complete updated Markdown database.`;
 
 export const DEFAULT_DATABASE_SETTINGS = Object.freeze({
   enabled: false, batchTokens: 8000, recentTokens: 15000,
