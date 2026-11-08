@@ -2796,7 +2796,10 @@ function portableChatFingerprint(messages) {
   };
   for (const m of messages) {
     mix(m.role); mix('|'); mix(m.hidden ? '1' : '0'); mix('|');
-    mix(JSON.stringify(m.swipes || [])); mix('|'); mix(m.swipeIdx || 0); mix('\n');
+    // SillyTavern JSONL exports user turns as one selected message, not swipes.
+    const selected = (m.swipes || [])[m.swipeIdx || 0] ?? '';
+    mix(JSON.stringify(m.role === 'user' ? [selected] : (m.swipes || [])));
+    mix('|'); mix(m.role === 'user' ? 0 : (m.swipeIdx || 0)); mix('\n');
   }
   return (hash >>> 0).toString(16);
 }
