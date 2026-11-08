@@ -522,3 +522,15 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .rx-test { margin: 6px 0 10px; }
 .rx-test > summary { cursor: pointer; font-weight: 600; color: var(--accent); padding: 6px 0; }
 .rx-test-out { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg3); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-height: 2.4em; margin: 0; font: inherit; font-size: .9rem; }
+
+/* UX branch: grouped, collapsible Extensions settings */
+.ext-category, .ext-panel { border: 1px solid var(--border, rgba(128,128,128,.22)); border-radius: 12px; overflow: hidden; margin: 8px 0; }
+.ext-category > summary, .ext-panel > summary { cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 12px; list-style-position: inside; font-weight: 600; }
+.ext-category > summary > span:first-child, .ext-panel > summary > span:first-child { flex: 1; }
+.ext-category-body { padding: 1px 10px 10px; }
+.ext-panel { margin: 8px 0; }
+.ext-panel > summary { font-size: .94em; }
+.ext-panel-body { padding: 4px 12px 12px; }
+.ext-state, .ext-count { font-size: .77em; font-weight: 600; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+.ext-state.is-on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.ext-state.is-off, .ext-count { color: var(--muted); background: var(--bg2, rgba(128,128,128,.1)); }
