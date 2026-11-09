@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.3)';
+const VERSION = '1.9.10 (UI + Narrative 0.4)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3622,30 +3622,50 @@ function renderSettingsView(open) {
     <p class="hint" id="storage-info">Everything is stored on this device only. Export a backup now and then.</p>
     <button class="btn danger sm" data-action="wipe">Delete all data</button>`;
 
+  const categories = [
+    { id: 'ai', label: 'Connection & AI', description: 'Connection, models, generation, presets, prompts and formatting', sections: [{ id: 'connection', title: 'API connection', body: connBody }, { id: 'preset', title: 'Preset (prompt manager)', body: presetBody }, { id: 'generation', title: 'Generation', body: genBody }, { id: 'formatting', title: 'Formatting (text completion)', body: fmtBody }, { id: 'prompt', title: 'Prompts (Simple preset)', body: promptBody }] },
+    { id: 'roleplay', label: 'Roleplay & Content', description: 'Characters, personas, lorebooks and quick replies', sections: [{ id: 'persona', title: 'Persona (you)', body: personaBody }, { id: 'lorebooks', title: 'Lorebooks', body: lorebookBody }, { id: 'qr', title: 'Quick replies', body: qrBody }] },
+    { id: 'extensions', label: 'Extensions', description: 'Memory, regex scripts, images, audio and writing', sections: [{ id: 'ext', title: 'Built-in extensions', body: extBody }, { id: 'regex', title: 'Regex scripts', body: regexBody }] },
+    { id: 'appearance', label: 'Appearance & Interface', description: 'Themes, typography and chat display', sections: [{ id: 'appearance', title: 'Appearance', body: apBody }, { id: 'ui', title: 'Interface', body: uiBody }] },
+    { id: 'data', label: 'Data & Backup', description: 'Import, export, sync and storage', sections: [{ id: 'data', title: 'Data & backup', body: dataBody }] }
+  ];
+  const selected = categories.find(c => c.id === route().a);
+  const sectionHtml = (section) => sec(section.id, section.title, section.body);
+  const categoryLinks = categories.map(c => `<button class="settings-category-link ${selected?.id === c.id ? 'selected' : ''}" data-action="go" data-to="#/settings/${c.id}">
+    <span class="settings-category-label">${c.label}</span><span class="settings-category-description">${c.description}</span>
+    <span class="settings-category-chevron" aria-hidden="true">›</span></button>`).join('');
+  const charactersLink = selected?.id === 'roleplay' ? `<div class="settings-character-panel"><h3>Characters &amp; Groups</h3>
+    <p class="hint">Manage your character library, groups and conversations.</p>
+    <button class="btn" data-action="go" data-to="#/">Open character library</button>
+    <button class="btn" data-action="import-files">Import characters</button></div>` : '';
+  const categoryContent = selected ? `${charactersLink}${selected.sections.map(sectionHtml).join('')}` : '';
   app.innerHTML = `
     <header class="bar">
-      <button class="icon-btn" data-action="go-back" aria-label="Back">${ICONS.back}</button>
-      <h1 class="title">Settings</h1>
+      <button class="icon-btn" data-action="settings-back" aria-label="Back">${ICONS.back}</button>
+      <h1 class="title">Settings${selected ? ' · ' + selected.label : ''}</h1>
     </header>
-    <main class="scroll pad">
-      ${sec('connection', 'API connection', connBody)}
-      ${sec('preset', 'Preset (prompt manager)', presetBody)}
-      ${sec('generation', 'Generation', genBody)}
-      ${sec('formatting', 'Formatting (text completion)', fmtBody)}
-      ${sec('persona', 'Persona (you)', personaBody)}
-      ${sec('lorebooks', 'Lorebooks', lorebookBody)}
-      ${sec('regex', 'Regex scripts', regexBody)}
-      ${sec('qr', 'Quick replies', qrBody)}
-      ${sec('ext', 'Extensions', extBody)}
-      ${sec('prompt', 'Prompts (Simple preset)', promptBody)}
-      ${sec('appearance', 'Appearance', apBody)}
-      ${sec('ui', 'Interface', uiBody)}
-      ${sec('data', 'Data & backup', dataBody)}
-      <p class="muted small center">${BUILD_NAME} — ${VERSION}</p>
-      <div class="bottom-space"></div>
+    <main class="scroll pad settings-layout">
+      <nav class="settings-sidebar" aria-label="Settings categories">
+        <label class="field"><span class="label">Find a setting</span><input id="settings-search" type="search" placeholder="Search settings…" autocomplete="off"></label>
+        <div id="settings-category-links">${categoryLinks}</div>
+      </nav>
+      <div class="settings-content">
+        ${selected ? `<h2 class="settings-content-title">${selected.label}</h2>${categoryContent}` : `<h2 class="settings-content-title">Settings</h2><p class="hint">Choose a category to see its options.</p><div class="settings-mobile-categories">${categoryLinks}</div>`}
+        <p class="muted small center">${BUILD_NAME + ' — ' + VERSION}</p>
+        <div class="bottom-space"></div>
+      </div>
     </main>`;
-
+  const search = document.querySelector('#settings-search');
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    document.querySelectorAll('.settings-category-link').forEach(link => {
+      const id = link.dataset.to.split('/').pop();
+      const cat = categories.find(c => c.id === id);
+      link.hidden = !!q && ![cat.label, cat.description, ...cat.sections.map(x => x.title)].join(' ').toLowerCase().includes(q);
+    });
+  });
   updateDatabaseBanner();
+
   if (navigator.storage && navigator.storage.estimate) {
     navigator.storage.estimate().then(async (est) => {
       const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
@@ -4683,6 +4703,7 @@ const actions = {
     go(`#/chat/${S.char.id}/${chat.id}`);
   },
   'chat-menu': chatMenu,
+  'settings-back': () => { if (route().a) go('#/settings'); else if (settingsReturn) go(settingsReturn.hash); else if (history.length > 1) history.back(); else go('#/'); },
   'generation-menu': generationMenu,
   'memory-tools': memoryToolsSheet,
   'new-chat': async () => {
@@ -5262,7 +5283,7 @@ const ICONS = {
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>'),
   share: svg('<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M16 6l-4-4-4 4M12 2v13"/>', 'width="16" height="16" style="vertical-align:-3px"'),
   wrench: svg('<path d="M14.7 6.3a5 5 0 0 0-6.4 6.4L3 18l3 3 5.3-5.3a5 5 0 0 0 6.4-6.4L14 13l-3-3z"/>'),
-  chatGear: svg('<path d="M19 10.5a7.5 7.5 0 0 0-7.5-7.5H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h2l3.5 3v-3h1.5"/><circle cx="18" cy="17" r="2"/><path d="M18 12.5v1.2m0 6.6v1.2m-4.5-4.5h1.2m6.6 0h1.2"/>'),
+  chatGear: svg('<path d="M20 12V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v10a2 2 0 0 0 2 2h2l4-4h2"/><g transform="translate(16 17) scale(.37)"><circle cx="0" cy="0" r="6"/><path d="M0-12v4M0 8v4M-12 0h4M8 0h4M-8.5-8.5l3 3M5.5 5.5l3 3M8.5-8.5l-3 3M-5.5 5.5l-3 3"/></g>'),
   dots: svg('<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>'),
   send: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
   stop: svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'),
