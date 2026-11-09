@@ -768,7 +768,20 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
     while (!S.dbCancel) {
       const batch = NDB.nextBatch(chat.messages, working.covered, cfg.batchTokens, flush || rebuild);
       if (!batch) { succeeded = true; break; }
-      const input = NDB.buildUpdateInput(working.text, batch, memNameOf);
+      // Per-call retention filter: the 0.14 default system prompt stays intact.
+      // Apply this to inherited memory too, so trivia does not accumulate.
+      const input = NDB.buildUpdateInput(working.text, batch, memNameOf) + `
+<retention_filter>
+Treat this database as LONG-TERM STORY MEMORY, not a transcript or scene inventory.
+Before returning the FULL database, audit BOTH the inherited text and new material:
+- KEEP lasting changes to relationships, characterization, trust, trauma, knowledge, secrets, consequential choices, timeline-specific history, world mechanics, open mysteries, promises, and real deadlines.
+- KEEP an ordinary action only for its lasting meaning. Example: Jason notices Catrin's malnourishment and carefully paces her food because of his own childhood experience. Do NOT preserve pastrami, sandwich placement, which bite was fed, foil, stove, or kitchen choreography.
+- KEEP a confession or change in intimacy; omit step-by-step kissing, sex, clothing, gestures, and other physical choreography unless a specific detail has an established lasting consequence.
+- KEEP a location, object, time, code, or precise number ONLY when it affects future decisions, access, a deadline, an unresolved plot, or a meaningful outcome. Remove expired logistics, minor inventory, ordinary meals, and decorative measurements.
+- ACTIVE THEATRE may briefly orient the immediate next scene; when the scene advances, retire its incidental details. The CHRONICLE must preserve outcomes, not every beat. DOSSIERS should describe what characters carry forward, not list props.
+- Do NOT erase or weaken the only record of a consequential fact to achieve brevity. Preserve separate timelines, unknown fates, who knows what, and task deadlines accurately.
+- Do NOT preserve trivia merely because it appears in the previous database. Consolidate duplicate important facts into their proper sections.
+</retention_filter>`;
       const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} });
       const priorSignature = NDB.fingerprint(chat.messages, batch.end);
       const batchStartedAt = Date.now();
