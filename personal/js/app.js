@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.5)';
+const VERSION = '1.9.10 (UI + Narrative 0.6)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -1241,11 +1241,65 @@ function safeAvatar(src) {
   return typeof src === 'string' && /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(src) ? src : null;
 }
 
+function avatarKey(src) {
+  let h = 2166136261;
+  for (let i = 0; i < src.length; i++) h = Math.imul(h ^ src.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(36) + '-' + src.length;
+}
+function avatarStyle(src) {
+  const f = S.settings.avatarFraming?.[avatarKey(src)];
+  if (!f) return '';
+  const x = Math.max(0, Math.min(100, Number(f.x) || 0));
+  const y = Math.max(0, Math.min(100, Number(f.y) || 0));
+  const z = Math.max(1, Math.min(3, Number(f.z) || 1));
+  return ` style="object-position:${x}% ${y}%;transform:scale(${z});transform-origin:${x}% ${y}%"`;
+}
 function avatarHtml(src, name, cls = 'av') {
   src = safeAvatar(src);
   return src
-    ? `<img class="${cls}" src="${esc(src)}" alt="">`
+    ? `<span class="${cls} avatar-frame"><img src="${esc(src)}" alt=""${avatarStyle(src)}></span>`
     : `<div class="${cls} av-fallback" style="--h:${hue(name)}">${esc((name || '?').trim()[0]?.toUpperCase() || '?')}</div>`;
+}
+function openAvatarFraming(src) {
+  src = safeAvatar(src);
+  if (!src) return toast('Choose an avatar image first.');
+  const key = avatarKey(src);
+  const saved = S.settings.avatarFraming?.[key] || { x: 50, y: 50, z: 1 };
+  openSheet(`<div class="sheet-title">Adjust avatar</div>
+    <p class="hint">Reposition and zoom the circular avatar. The original image is unchanged.</p>
+    <div class="avatar-frame-preview"><img id="avatar-frame-img" src="${esc(src)}" alt="Avatar preview"></div>
+    <label class="field"><span class="label">Horizontal position</span><input type="range" id="avatar-frame-x" min="0" max="100" value="${saved.x ?? 50}"></label>
+    <label class="field"><span class="label">Vertical position</span><input type="range" id="avatar-frame-y" min="0" max="100" value="${saved.y ?? 50}"></label>
+    <label class="field"><span class="label">Zoom</span><input type="range" id="avatar-frame-z" min="100" max="300" value="${Math.round((saved.z || 1)*100)}"></label>
+    <div class="row wrap"><button class="btn" id="avatar-frame-reset" type="button">Reset</button>
+    <button class="btn primary" id="avatar-frame-save" type="button">Save framing</button></div>`);
+  const img = document.getElementById('avatar-frame-img');
+  const x = document.getElementById('avatar-frame-x');
+  const y = document.getElementById('avatar-frame-y');
+  const z = document.getElementById('avatar-frame-z');
+  const preview = () => {
+    img.style.objectPosition = `${x.value}% ${y.value}%`;
+    img.style.transformOrigin = `${x.value}% ${y.value}%`;
+    img.style.transform = `scale(${Number(z.value)/100})`;
+  };
+  [x,y,z].forEach(el => el.addEventListener('input', preview));
+  document.getElementById('avatar-frame-reset').addEventListener('click', () => { x.value=50; y.value=50; z.value=100; preview(); });
+  document.getElementById('avatar-frame-save').addEventListener('click', () => {
+    (S.settings.avatarFraming ||= {})[key] = {x:+x.value,y:+y.value,z:+z.value/100};
+    saveSettings(); closeSheet(); render();
+  });
+  let dragging = false, px = 0, py = 0;
+  img.addEventListener('pointerdown', e => { dragging=true; px=e.clientX; py=e.clientY; img.setPointerCapture(e.pointerId); });
+  img.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const box=img.getBoundingClientRect();
+    x.value=Math.max(0,Math.min(100,+x.value-(e.clientX-px)/box.width*100));
+    y.value=Math.max(0,Math.min(100,+y.value-(e.clientY-py)/box.height*100));
+    px=e.clientX;py=e.clientY;preview();
+  });
+  img.addEventListener('pointerup',()=>{dragging=false;});
+  img.addEventListener('pointercancel',()=>{dragging=false;});
+  preview();
 }
 
 function timeAgo(ts) {
@@ -3120,6 +3174,7 @@ async function renderEditView(id) {
     <main class="scroll pad form">
       <div class="avatar-edit">
         <button class="avatar-pick" data-action="char-avatar" aria-label="Change avatar">${avatarHtml(d.avatar, d.name || '?', 'av xl')}<span class="small muted">Tap to change</span></button>
+        ${d.avatar ? '<button class="btn sm" data-action="char-frame">Adjust avatar</button>' : ''}
       </div>
       ${EDIT_FIELDS.map(([k, label, hint]) => `
         <label class="field">
@@ -3456,6 +3511,7 @@ function renderSettingsView(open) {
         <option value="__new">+ New persona…</option>
       </select></label>
     <div class="row"><button class="avatar-pick" data-action="persona-avatar">${avatarHtml(persona.avatar, persona.name, 'av lg')}</button>
+      ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
       <div class="grow">${settingsField('Your name', 'persona.name', 'text')}</div></div>
     ${settingsField('Description', 'persona.description', 'textarea', '', 'Who you are in the story. Sent to the AI.')}
     <div class="field"><span class="label">Lorebooks for this persona</span>
@@ -4752,6 +4808,7 @@ const actions = {
     go(d && !d.isNew ? `#/chat/${d.id}` : '#/');
   },
   'char-save': saveDraft,
+  'char-frame': () => openAvatarFraming(S.draft?.avatar),
   'char-avatar': async () => {
     const [f] = await pickFile('file-avatar');
     if (!f) return;
@@ -4940,6 +4997,7 @@ const actions = {
   },
   'enhance-reset': () => { S.settings.ext.enhance.prompt = DEFAULT_ENHANCE_SETTINGS.prompt; saveSettings(); rerenderSettings(); },
   'reset-main': () => { S.settings.prompt.main = DEFAULT_MAIN; saveSettings(); rerenderSettings(); },
+  'persona-frame': () => openAvatarFraming(activePersona().avatar),
   'persona-avatar': async () => {
     const [f] = await pickFile('file-avatar');
     if (!f) return;
