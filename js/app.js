@@ -16,7 +16,7 @@ import * as MEM from './memory.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (UX 0.1)';
+const VERSION = '1.9.9.0 (UX 0.2)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
 function defaultSettings() {
@@ -1085,7 +1085,11 @@ function route() {
   return { name: parts[0] || 'home', a: parts[1], b: parts[2] };
 }
 let goAfterPop = null; // a screen to open once the sheet's history entry is gone
+let settingsReturn = null;
 const go = (hash) => {
+  if (hash === '#/settings' && route().name === 'chat') {
+    settingsReturn = { hash: location.hash, draft: document.querySelector('#send_textarea')?.value || '', scroll: document.querySelector('#chat')?.scrollTop || 0 };
+  }
   // A sheet was just closed and its history entry is still being removed: open
   // the screen after that, or the pending "back" would undo it.
   if (sheetPopPending) { goAfterPop = hash; return; }
@@ -1105,7 +1109,16 @@ async function render() {
   if (r.name !== 'preset' && r.name !== 'lorebook' && r.name !== 'qr') app.dataset.view = '';
   if (r.name !== 'group') S.groupDraft = null;
   try {
-    if (r.name === 'chat' && r.a) await renderChatView(r.a, r.b);
+    if (r.name === 'chat' && r.a) {
+      await renderChatView(r.a, r.b);
+      if (settingsReturn && location.hash === settingsReturn.hash) {
+        const draft = document.querySelector('#send_textarea');
+        if (draft) draft.value = settingsReturn.draft;
+        const chatScroll = document.querySelector('#chat');
+        if (chatScroll) chatScroll.scrollTop = settingsReturn.scroll;
+        settingsReturn = null;
+      }
+    }
     else if (r.name === 'edit' && r.a) await renderEditView(r.a);
     else if (r.name === 'preset' && r.a) renderPresetView(r.a);
     else if (r.name === 'group' && r.a) await renderGroupEditor(r.a);
@@ -2077,11 +2090,13 @@ async function renderChatView(charId, chatId) {
   app.innerHTML = `
     <header class="bar chat-bar" id="top-bar">
       <button class="icon-btn" data-action="go" data-to="#/" aria-label="Back">${ICONS.back}</button>
-      <button class="chat-title" data-action="chat-menu">
+      <button class="chat-title" data-action="chat-menu" aria-label="Conversation history">
         ${group ? groupAvatarHtml(groupMembers(), 'sm') : avatarHtml(char.avatar, char.name, 'av sm')}
         <span class="ct-text"><span class="ct-name">${esc(char.name)}</span><span class="ct-sub">${esc(group ? groupMembers().map((c) => c.name).join(', ') : (conn ? (conn.model || 'no model') : 'no connection'))}</span></span>
       </button>
-      <button class="icon-btn" data-action="chat-menu" aria-label="Chat menu">${ICONS.dots}</button>
+      <button class="icon-btn" data-action="generation-menu" aria-label="Generation controls" title="Generation controls">${ICONS.sliders}</button>
+      <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
+      <button class="icon-btn" data-action="chat-menu" aria-label="Chat and character" title="Chat and character">${ICONS.chatGear}</button>
     </header>
     <div id="sheld">
       <div id="expr-panel" class="expr-panel" data-action="expr-toggle" hidden></div>
@@ -2089,7 +2104,7 @@ async function renderChatView(charId, chatId) {
       <div id="attach-row" class="attach-row" hidden></div>
       ${qrBarHtml()}
       <footer class="composer" id="send_form">
-        <div id="leftSendForm"><button class="qa-btn" id="options_button" data-action="quick-actions" aria-label="More actions">${ICONS.wand}</button>${S.settings.ext.vision.enabled ? `<button class="qa-btn" id="attach_button" data-action="attach" aria-label="Attach an image">${ICONS.image}</button>` : ''}</div>
+        <div id="leftSendForm"><button class="qa-btn" id="options_button" data-action="quick-actions" aria-label="Chat tools" title="Chat tools">${ICONS.wrench}</button>${S.settings.ext.vision.enabled ? `<button class="qa-btn" id="attach_button" data-action="attach" aria-label="Attach an image">${ICONS.image}</button>` : ''}</div>
         <textarea id="send_textarea" rows="1" placeholder="Message ${esc(char.name)}" enterkeyhint="${S.settings.ui.enterSends ? 'send' : 'enter'}"></textarea>
         <div id="rightSendForm">
           <button class="enh-btn" id="enh-btn" data-action="enhance" aria-label="Enhance reply" title="Enhance reply" hidden>✨</button>
@@ -2566,16 +2581,13 @@ function chatMenu() {
       ${S.group ? groupAvatarHtml(groupMembers(), 'md') : avatarHtml(S.char.avatar, S.char.name, 'av md')}
       <div><div class="sh-title">${esc(S.char.name)}</div><div class="muted small">${chats.length} chat${chats.length === 1 ? '' : 's'}</div></div>
     </div>
-    <div class="menu-grid">
+    <h3 class="sheet-sub">Chat &amp; Character</h3><div class="menu-grid">
       <button data-action="new-chat">${ICONS.plus}<span>New chat</span></button>
       <button data-action="go" data-to="#/${S.group ? 'group' : 'edit'}/${S.char.id}">${ICONS.edit}<span>Edit ${S.group ? 'group' : 'character'}</span></button>
-      <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
       <button data-action="go" data-to="#/search/${S.chat.id}">${ICONS.search}<span>Search this chat</span></button>
-      ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
       ${S.group ? '' : `<button data-action="persona-lock">${ICONS.user}<span>${S.char.personaId === S.settings.activePersona ? `Unlock persona` : `Lock persona “${esc(activePersona().name)}”`}</span></button>`}
       <button data-action="export-chat">${ICONS.download}<span>Export chat</span></button>
       ${S.group ? '' : `<button data-action="import-chat">${ICONS.import}<span>Import ST chat</span></button>`}
-      <button data-action="go" data-to="#/settings">${ICONS.gear}<span>Settings</span></button>
     </div>
     <h3 class="sheet-sub">Chats</h3>
     <div class="chat-list">
@@ -2594,12 +2606,46 @@ function chatMenu() {
     </div>`);
 }
 
+function activeMemoryToolsHtml() {
+  const e = S.settings.ext;
+  const tools = [
+    
+    { enabled: !!e.memory?.enabled, action: 'qa-memory', label: 'Memory', icon: ICONS.layers },
+    { enabled: !!e.summarize?.enabled, action: 'qa-summary', label: 'Summary', icon: ICONS.note },
+  ].filter(x => x.enabled);
+  if (!tools.length) return '';
+  if (tools.length > 1) return '<button data-action="memory-tools">' + ICONS.layers + '<span>Memory Tools</span></button>';
+  const t = tools[0];
+  return '<button data-action="' + t.action + '">' + t.icon + '<span>' + t.label + '</span></button>';
+}
+function memoryToolsSheet() {
+  const e = S.settings.ext;
+  const entries = [
+    
+    {enabled: !!e.memory?.enabled, action:'qa-memory', label:'Memory'},
+    {enabled: !!e.summarize?.enabled, action:'qa-summary', label:'Summary'}
+  ].filter(x=>x.enabled);
+  openSheet('<div class="sheet-title">Memory Tools</div><div class="menu-grid">' + entries.map(x=>'<button data-action="'+x.action+'">'+ICONS.note+'<span>'+x.label+'</span></button>').join('')+'</div>');
+}
+function generationMenu() {
+  const conn = activeConn();
+  openSheet(`<div class="sheet-title">Generation Controls</div>
+    <div class="menu-grid">
+      <button data-action="go" data-to="#/settings">${ICONS.gear}<span>Connection / Model</span></button>
+      <button data-action="go" data-to="#/settings">${ICONS.sliders}<span>Generation settings</span></button>
+      ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : `<button data-action="go" data-to="#/settings"><span>Prompt settings</span></button>`}
+    </div>
+    <label class="field"><span class="label">Preset</span><select data-change="select-preset">
+      <option value="">Simple (built-in)</option>
+      ${S.presets.map(x => `<option value="${x.id}" ${S.settings.activePreset === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+    </select></label>
+    <p class="hint">Model: ${esc(conn?.model || 'No model selected')}</p>`);
+}
 function quickActions() {
-  const presets = S.presets;
   const last = S.chat.messages[S.chat.messages.length - 1];
   const note = S.chat.authorsNote;
   openSheet(`
-    <div class="menu-grid">
+    <div class="sheet-title">Chat Tools</div><div class="menu-grid">
       <button data-action="qa-continue" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.forward}<span>Continue</span></button>
       <button data-action="qa-impersonate">${ICONS.user}<span>Impersonate</span></button>
       <button data-action="qa-regen" ${!last || last.role === 'user' ? 'disabled' : ''}>${ICONS.refresh}<span>Regenerate</span></button>
@@ -2607,21 +2653,14 @@ function quickActions() {
       <button data-action="qa-note">${ICONS.note}<span>Author's Note${note && note.text && note.text.trim() ? ' •' : ''}</span></button>
       ${S.settings.ext.enhance.enabled ? `<button data-action="enhance">✨<span>Enhance draft</span></button>` : ''}
       ${S.enhanceOriginal && S.enhanceOriginal.chatId === S.chat.id ? `<button data-action="restore-draft">${ICONS.back}<span>Restore draft</span></button>` : ''}
-      <button data-action="qa-summary">${ICONS.note}<span>Summary${S.chat.summary && S.chat.summary.text ? ' •' : ''}</span></button>
-      ${S.settings.ext.memory.enabled || S.chat.mem ? `<button data-action="qa-memory">${ICONS.layers}<span>Memory</span></button>` : ''}
+      ${activeMemoryToolsHtml()}
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
-      ${activePreset() ? `<button data-action="go" data-to="#/preset/${activePreset().id}">${ICONS.sliders}<span>Prompt toggles</span></button>` : ''}
     </div>
     ${S.group ? `
       <h3 class="sheet-sub">Make someone speak</h3>
       <div class="speak-row">
         ${groupMembers().map((c) => `<button data-action="speak" data-id="${c.id}">${avatarHtml(c.avatar, c.name, 'av md')}<span>${esc(c.name)}</span></button>`).join('')}
       </div>` : ''}
-    <label class="field"><span class="label">Preset</span>
-      <select data-change="select-preset">
-        <option value="">Simple (built-in)</option>
-        ${presets.map((x) => `<option value="${x.id}" ${S.settings.activePreset === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
-      </select></label>
   `);
 }
 
@@ -3843,7 +3882,7 @@ function mergeSettings(local, theirs, theirsNewer) {
 // ---------- event wiring ----------
 const actions = {
   go: (el) => go(el.dataset.to),
-  'go-back': () => (history.length > 1 ? history.back() : go('#/')),
+  'go-back': () => { if (route().name === 'settings' && settingsReturn) go(settingsReturn.hash); else if (history.length > 1) history.back(); else go('#/'); },
   'install-app': async () => {
     const p = installPrompt;
     if (!p) return;
@@ -4219,6 +4258,8 @@ const actions = {
     go(`#/chat/${S.char.id}/${chat.id}`);
   },
   'chat-menu': chatMenu,
+  'generation-menu': generationMenu,
+  'memory-tools': memoryToolsSheet,
   'new-chat': async () => {
     const chat = await createChat(S.char);
     await saveChat(chat);
@@ -4780,6 +4821,8 @@ const ICONS = {
   import: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/>'),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>'),
   share: svg('<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M16 6l-4-4-4 4M12 2v13"/>', 'width="16" height="16" style="vertical-align:-3px"'),
+  wrench: svg('<path d="M14.7 6.3a5 5 0 0 0-6.4 6.4L3 18l3 3 5.3-5.3a5 5 0 0 0 6.4-6.4L14 13l-3-3z"/>'),
+  chatGear: svg('<path d="M19 10.5a7.5 7.5 0 0 0-7.5-7.5H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h2l3.5 3v-3h1.5"/><circle cx="18" cy="17" r="2"/><path d="M18 12.5v1.2m0 6.6v1.2m-4.5-4.5h1.2m6.6 0h1.2"/>'),
   dots: svg('<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>'),
   send: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
   stop: svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'),
