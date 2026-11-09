@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.9.0 (0.22.6)';
+const VERSION = '1.9.9.0 (0.22.7)';
 const BUILD_NAME = 'PocketTavern (meow - narrative-database)';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3499,8 +3499,8 @@ function renderSettingsView(open) {
     <details class="section"><summary>Database update prompt and injection template</summary><div class="sec-body">
       <label class="field"><span class="label">Complete database update prompt</span><textarea rows="12" data-ext-ndb="prompt">${esc(nd.prompt)}</textarea></label>
       <label class="field"><span class="label">Injection template (use {{database}})</span><textarea rows="3" data-ext-ndb="template">${esc(nd.template)}</textarea></label>
-      <button class="btn ndb-reset-prompt-btn" data-action="ndb-reset-prompt">Restore default update prompt (0.22.6 · same 0.14 prompt)</button>
-      <p class="hint">Version 0.22.6 preserves the original 0.14 update prompt. Validation rejects incomplete-memory placeholders, automatically retries a malformed response once, checks protected continuity, and retains the last good checkpoint on failure. The Recent Log may be empty. Saved custom prompts are unchanged.</p>
+      <button class="btn ndb-reset-prompt-btn" data-action="ndb-reset-prompt">Restore default update prompt (0.22.7 · same 0.14 prompt)</button>
+      <p class="hint">Version 0.22.7 preserves the original 0.14 update prompt. Validation rejects incomplete-memory placeholders, automatically retries a malformed response once, checks protected continuity, and retains the last good checkpoint on failure. The Recent Log may be empty. Saved custom prompts are unchanged.</p>
     </div></details>
     <div id="ndb-settings-progress" class="ndb-running-banner" hidden></div>
     <button class="btn ndb-manage-btn" data-action="qa-database">Manage Narrative Database / Rebuild from Chat History</button>
