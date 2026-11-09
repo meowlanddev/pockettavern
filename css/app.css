@@ -558,3 +558,13 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 @media (max-width: 640px) {
   .ndb-manage-btn, .ndb-reset-prompt-btn { display: flex; width: 100%; justify-content: center; }
 }
+
+/* 0.22.6: Keep chat picker and long chat titles inside narrow mobile sheets. */
+.sheet-wrap, .sheet, .sheet-body { box-sizing: border-box; max-width: 100%; min-width: 0; }
+.sheet .chat-list { width: 100%; min-width: 0; }
+.sheet .chat-list > .btn { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 600px) {
+  .sheet { width: 100%; max-width: 100vw; }
+  .sheet .chat-list { padding-inline: 0; }
+  .sheet .chat-list > .btn { padding-inline: 12px; }
+}
