@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.4)';
+const VERSION = '1.9.10 (UI + Narrative 0.5)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -1432,10 +1432,9 @@ async function renderHome() {
     <header class="bar">
       <h1 class="title">${BUILD_NAME}</h1>
       <div class="spacer"></div>
-      <button class="icon-btn" data-action="go" data-to="#/search" aria-label="Search chats">${ICONS.search}</button>
-      <button class="icon-btn" data-action="import-files" aria-label="Import character">${ICONS.import}</button>
-      <button class="icon-btn" data-action="new-menu" aria-label="New character or group">${ICONS.plus}</button>
-      <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Settings">${ICONS.gear}</button>
+      <button class="icon-btn" data-action="generation-menu" aria-label="Generation controls" title="Generation controls">${ICONS.sliders}</button>
+      <button class="icon-btn" data-action="home-chat-menu" aria-label="Chats and characters" title="Chats and characters">${ICONS.chatGear}</button>
+      <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
     </header>
     <main class="scroll pad">
       ${isIOS && !isStandalone ? `<div class="banner">Install: tap <b>Share</b> ${ICONS.share} then <b>Add to Home Screen</b> for the full-screen app.</div>` : ''}
@@ -2354,8 +2353,8 @@ async function renderChatView(charId, chatId) {
         <span class="ct-text"><span class="ct-name">${esc(char.name)}</span><span class="ct-sub">${esc(group ? groupMembers().map((c) => c.name).join(', ') : (conn ? (conn.model || 'no model') : 'no connection'))}</span></span>
       </button>
       <button class="icon-btn" data-action="generation-menu" aria-label="Generation controls" title="Generation controls">${ICONS.sliders}</button>
-      <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
       <button class="icon-btn" data-action="chat-menu" aria-label="Chat and character" title="Chat and character">${ICONS.chatGear}</button>
+      <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
     </header>
     <div id="ndb-running-banner" class="ndb-running-banner" role="status" aria-live="polite" hidden></div>
     <div id="sheld">
@@ -2888,6 +2887,15 @@ function memoryToolsSheet() {
     {enabled: !!e.summarize?.enabled, action:'qa-summary', label:'Summary'}
   ].filter(x=>x.enabled);
   openSheet('<div class="sheet-title">Memory Tools</div><div class="menu-grid">' + entries.map(x=>'<button data-action="'+x.action+'">'+ICONS.note+'<span>'+x.label+'</span></button>').join('')+'</div>');
+}
+function homeChatMenu() {
+  openSheet(`<div class="sheet-title">Chats &amp; Characters</div>
+    <div class="menu-grid">
+      <button data-action="go" data-to="#/search">${ICONS.search}<span>Search chats</span></button>
+      <button data-action="new-menu">${ICONS.plus}<span>New character or group</span></button>
+      <button data-action="import-files">${ICONS.import}<span>Import character</span></button>
+    </div>
+    <p class="hint">Your character library and recent chats are on the home screen.</p>`);
 }
 function generationMenu() {
   const conn = activeConn();
@@ -4705,6 +4713,7 @@ const actions = {
   'chat-menu': chatMenu,
   'settings-back': () => { if (route().a) go('#/settings'); else if (settingsReturn) go(settingsReturn.hash); else if (history.length > 1) history.back(); else go('#/'); },
   'generation-menu': generationMenu,
+  'home-chat-menu': homeChatMenu,
   'memory-tools': memoryToolsSheet,
   'new-chat': async () => {
     const chat = await createChat(S.char);
