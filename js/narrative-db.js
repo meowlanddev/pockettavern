@@ -132,6 +132,31 @@ export function fingerprint(messages, count = messages.length) {
 }
 
 export const isStale = (messages, state) => !!(state && state.covered && fingerprint(messages, state.covered) !== state.signature);
+
+// Find the newest retained snapshot whose entire covered prefix still matches.
+// Never trust an old summary merely because its message count is unchanged.
+export function latestValidCheckpoint(messages, ...states) {
+  const candidates = [];
+  for (const state of states) {
+    if (!state) continue;
+    if (state.text && Number.isInteger(state.covered) && state.covered >= 0 && state.covered <= messages.length && state.signature)
+      candidates.push({ covered: state.covered, text: state.text, signature: state.signature, at: state.at, checkpoints: state.checkpoints || [] });
+    for (const checkpoint of state.checkpoints || []) {
+      if (checkpoint?.text && Number.isInteger(checkpoint.covered) && checkpoint.covered >= 0 && checkpoint.covered <= messages.length && checkpoint.signature)
+        candidates.push(checkpoint);
+    }
+  }
+  candidates.sort((a, b) => b.covered - a.covered || (b.at || 0) - (a.at || 0));
+  for (const candidate of candidates) {
+    if (fingerprint(messages, candidate.covered) !== candidate.signature) continue;
+    const retained = candidates.filter(c => c.covered <= candidate.covered && fingerprint(messages, c.covered) === c.signature);
+    const unique = new Map();
+    for (const cp of retained) if (!unique.has(cp.covered)) unique.set(cp.covered, { covered: cp.covered, at: cp.at, text: cp.text, signature: cp.signature });
+    return { text: candidate.text, covered: candidate.covered, signature: candidate.signature, checkpoints: [...unique.values()].sort((a,b) => a.covered-b.covered).slice(-20) };
+  }
+  return null;
+}
+
 export function pendingTokens(messages, covered = 0) {
   return messages.slice(covered).filter(m => !m.hidden && messageText(m).trim()).reduce((s, m) => s + estimateTokens(messageText(m)) + 4, 0);
 }
