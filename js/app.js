@@ -716,7 +716,7 @@ function databaseSheet() {
     <div class="row wrap">
       ${resumable ? `<button class="btn primary" data-action="ndb-resume" ${prog ? 'disabled' : ''}>▶ Resume partial rebuild</button>` : chat.narrativeDbLastError ? `<button class="btn primary" data-action="ndb-retry" ${prog ? 'disabled' : ''}>↻ Retry failed rebuild</button>` : ''}
       <button class="btn primary" data-action="ndb-update" ${prog || stale ? 'disabled' : ''}>Update from Last Checkpoint</button>
-      <button class="btn" data-action="ndb-rebuild" ${prog ? 'disabled' : ''}>${resumable ? 'Restart rebuild from beginning' : 'Rebuild Changed History'}</button>
+      <button class="btn" data-action="ndb-rebuild" ${prog ? 'disabled' : ''}>${resumable ? 'Rebuild from Saved Checkpoint' : 'Rebuild Changed History'}</button>
       ${prog ? '<button class="btn" data-action="ndb-cancel">Cancel after current batch</button>' : ''}
       <button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Database</button>
     </div>
