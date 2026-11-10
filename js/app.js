@@ -701,7 +701,8 @@ function databaseSheet() {
   const pending = NDB.pendingTokens(chat.messages, dbState?.covered || 0);
   const prog = S.dbProgress && S.dbProgress.chatId === chat.id ? S.dbProgress : null;
   const resumable = chat.narrativeDbPending && chat.narrativeDbPending.covered > 0 && !NDB.isStale(chat.messages, chat.narrativeDbPending);
-  const rebuildStart = resumable ? chat.narrativeDbPending.covered : 0;
+  const recoverable = NDB.latestValidCheckpoint(chat.messages, chat.narrativeDbPending, dbState);
+  const rebuildStart = resumable ? chat.narrativeDbPending.covered : (recoverable?.covered || 0);
   const rebuildBatches = NDB.countBatches(chat.messages, rebuildStart, cfg.batchTokens);
   openSheet(`
     <div class="sheet-title" id="ndb-sheet">Narrative Database ${prog ? '<span class="muted small">· processing…</span>' : ''}</div>
@@ -715,12 +716,12 @@ function databaseSheet() {
     <div class="row wrap">
       ${resumable ? `<button class="btn primary" data-action="ndb-resume" ${prog ? 'disabled' : ''}>▶ Resume partial rebuild</button>` : chat.narrativeDbLastError ? `<button class="btn primary" data-action="ndb-retry" ${prog ? 'disabled' : ''}>↻ Retry failed rebuild</button>` : ''}
       <button class="btn primary" data-action="ndb-update" ${prog || stale ? 'disabled' : ''}>Update from Last Checkpoint</button>
-      <button class="btn" data-action="ndb-rebuild" ${prog ? 'disabled' : ''}>${resumable ? 'Restart rebuild from beginning' : 'Rebuild from Chat History'}</button>
+      <button class="btn" data-action="ndb-rebuild" ${prog ? 'disabled' : ''}>${resumable ? 'Restart rebuild from beginning' : 'Rebuild Changed History'}</button>
       ${prog ? '<button class="btn" data-action="ndb-cancel">Cancel after current batch</button>' : ''}
       <button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Database</button>
     </div>
-    <p class="hint">Full rebuild: approximately ${rebuildBatches} sequential model calls at the current batch size (${Math.round(cfg.batchTokens).toLocaleString()} estimated tokens). ${rebuildStart ? 'Valid partial rebuild detected; estimate covers remaining messages. ' : ''}Timing estimate appears after the first successful batch; later batches may take longer as the database grows. API costs may apply.</p>
-    ${stale ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Earlier messages were edited, deleted or reordered. Database is stale. Use Rebuild from Chat History.</p>' : ''}
+    <p class="hint">Rebuild: approximately ${rebuildBatches} sequential model calls from message ${rebuildStart + 1} at the current batch size (${Math.round(cfg.batchTokens).toLocaleString()} estimated tokens). ${rebuildStart ? 'Valid partial rebuild detected; estimate covers remaining messages. ' : ''}Timing estimate appears after the first successful batch; later batches may take longer as the database grows. API costs may apply.</p>
+    ${stale ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Chat history changed. Rebuild will reuse the latest matching checkpoint' + (recoverable ? ' (through message ' + recoverable.covered + ')' : ' if available; otherwise it starts at the beginning') + '.</p>' : ''}
     ${prog ? `<p class="hint">${esc(prog.message)} (${prog.done}/${prog.total} batches).${prog.lastSeconds != null ? ` Last batch: ${databaseDuration(prog.lastSeconds)}.${databaseEstimate(prog)}` : ''} This might take a while… Progress is saved after each successful batch.</p>` : ''}
     ${resumable ? `<p class="hint">Saved partial rebuild: ${chat.narrativeDbPending.covered} / ${chat.messages.length} messages processed. Resume continues from that checkpoint without repeating completed batches.</p>` : chat.narrativeDbPending ? '<p class="hint">A saved partial rebuild no longer matches this chat and cannot be resumed; start a fresh rebuild.</p>' : ''}
     ${chat.narrativeDbLastError && !prog && !resumable ? `<p class="hint">The failed batch can be retried from the beginning without deleting your current active database.</p>` : ''}
@@ -741,10 +742,11 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
   if (!chat || !chat.messages.length) { if (!silent) toast('No chat messages to process.'); return; }
   const old = chat.narrativeDb || null;
   if (!rebuild && NDB.isStale(chat.messages, old)) {
-    if (!silent) toast('Database is stale. Rebuild from Chat History.', 5500);
+    if (!silent) toast('Database is stale. Use Rebuild Changed History to resume from the last matching checkpoint.', 5500);
     return;
   }
-  const start = rebuild ? 0 : (old?.covered || 0);
+  const recovery = rebuild && !restart ? NDB.latestValidCheckpoint(chat.messages, chat.narrativeDbPending, old) : null;
+  const start = rebuild ? (recovery?.covered || 0) : (old?.covered || 0);
   if (!NDB.nextBatch(chat.messages, start, cfg.batchTokens, flush || rebuild)) {
     if (!silent) toast('Not enough new messages for the next update.');
     return;
@@ -753,8 +755,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
   S.dbCancel = false;
   // Staging data is independent of active data: a failed rebuild never destroys it.
   // A paused rebuild can resume without re-paying for all earlier successful batches.
-  const pendingRebuild = rebuild && !restart && chat.narrativeDbPending && chat.narrativeDbPending.covered > 0 && !NDB.isStale(chat.messages, chat.narrativeDbPending)
-    ? chat.narrativeDbPending : null;
+  const pendingRebuild = recovery;
   if (rebuild && restart) { delete chat.narrativeDbPending; await saveChat(chat); }
   const working = rebuild ? structuredClone(pendingRebuild || { text: '', covered: 0, checkpoints: [] }) : {
     text: old?.text || '', covered: start, checkpoints: [...(old?.checkpoints || [])],
@@ -868,7 +869,7 @@ function maybeDatabase(chat) {
   const state = chat.narrativeDb;
   if (NDB.isStale(chat.messages, state)) {
     if (!S.dbStaleWarned) S.dbStaleWarned = new Set();
-    if (!S.dbStaleWarned.has(chat.id)) { S.dbStaleWarned.add(chat.id); toast('Narrative Database needs rebuilding after edits.', 6000); }
+    if (!S.dbStaleWarned.has(chat.id)) { S.dbStaleWarned.add(chat.id); toast('Narrative Database: history changed. Rebuild can reuse matching checkpoints.', 6000); }
     return;
   }
   if (NDB.pendingTokens(chat.messages, state?.covered || 0) >= cfg.batchTokens) runDatabase(chat, { silent: true });
@@ -4410,9 +4411,10 @@ const actions = {
   'ndb-rebuild': () => {
     const chat = S.chat;
     const partial = chat.narrativeDbPending;
-    const batches = NDB.countBatches(chat.messages, 0, S.settings.ext.database.batchTokens);
-    const warning = partial?.covered ? ' This discards the saved partial rebuild and starts over.' : '';
-    if (confirm('Rebuild Narrative Database from the beginning? Estimated: ' + batches + ' sequential model requests for ' + chat.messages.length + ' messages. Large histories can take a long time and may incur API charges.' + warning + ' The current active database remains unchanged until the rebuild succeeds. Continue?')) runDatabase(chat, { rebuild: true, flush: true, restart: true });
+     const recovery = NDB.latestValidCheckpoint(chat.messages, chat.narrativeDbPending, chat.narrativeDb);
+    const start = recovery?.covered || 0;
+    const remaining = NDB.countBatches(chat.messages, start, S.settings.ext.database.batchTokens);
+    if (confirm('Rebuild Narrative Database from the latest valid checkpoint (through message ' + start + ')? Estimated: ' + remaining + ' sequential model requests for the remaining ' + (chat.messages.length - start) + ' messages. Large histories can take a while and may incur API charges.' + (partial?.covered ? ' A valid partial rebuild will be reused when possible.' : '') + ' The current active database remains unchanged until the rebuild succeeds. Continue?')) runDatabase(chat, { rebuild: true, flush: true });
   },
   'ndb-cancel': () => { S.dbCancel = true; toast('Cancel requested — stopping after current API call.'); },
   'ndb-clear': async () => {
