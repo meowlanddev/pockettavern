@@ -3419,6 +3419,11 @@ function renderSettingsView(open) {
     <button class="btn" data-action="import-files">${ICONS.import} Import SillyTavern instruct template</button>`;
 
   const genBody = `
+    ${activePreset() ? `<label class="field"><span class="label">Chat Completion post-processing</span>
+      <select data-change="preset-post-processing" data-id="${esc(activePreset().id)}">
+        ${[['none','None'],['merge','Merge consecutive'],['semi-strict','Semi-Strict'],['strict','Strict']].map(([value,label]) => `<option value="${value}" ${(activePreset().postProcessing || 'none') === value ? 'selected' : ''}>${label}</option>`).join('')}
+      </select><span class="hint">Saved with the active prompt preset (${esc(activePreset().name)}). Semi-Strict merges adjacent same-role messages; Strict also moves system instructions to the front. May affect injection placement; does not bypass provider moderation.</span>
+    </label>` : '<p class="hint">Chat Completion post-processing is available when a prompt preset is active.</p>'}
     ${settingsField('Max response tokens', 'preset.max_tokens')}
     ${settingsField('Context size (tokens)', 'preset.context_size', 'number', '', 'Older messages are dropped to fit')}
     <div class="cost-est hint" id="cost-est">${costEstimateHtml()}</div>
@@ -3893,11 +3898,6 @@ function renderPresetView(id) {
     <main class="scroll pad">
       ${S.settings.activePreset !== id ? `<button class="banner warn" data-action="preset-activate" data-id="${id}">This preset isn't active. Tap to use it.</button>` : ''}
       <p class="hint">Switch prompts on and off like SillyTavern's prompt manager. Tap a name to read or edit it.</p>
-      <label class="field"><span class="label">Chat Completion post-processing</span>
-        <select data-change="preset-post-processing" data-id="${esc(p.id)}">
-          ${[['none','None'],['merge','Merge consecutive'],['semi-strict','Semi-Strict'],['strict','Strict']].map(([value,label]) => `<option value="${value}" ${(p.postProcessing || 'none') === value ? 'selected' : ''}>${label}</option>`).join('')}
-        </select><span class="hint">Per preset. Semi-Strict merges adjacent equal-role messages; Strict also groups system instructions at the front. This can change injection placement. It does not bypass provider filtering.</span>
-      </label>
       ${(() => { const n = (p.raw?.extensions?.regex_scripts || []).length; return n ? `<label class="toggle"><span><span class="label">Run this preset's ${n} regex script${n === 1 ? '' : 's'}</span><span class="hint">Bundled in the preset file, like SillyTavern's preset regex.</span></span><input type="checkbox" data-preset-rx="1" ${p.runPresetRegex === false ? '' : 'checked'}><i></i></label>` : ''; })()}
       <input class="search" type="search" placeholder="Search prompts" value="${esc(S.pmQuery || '')}" data-input="pm-search">
       <div class="pm-list">
