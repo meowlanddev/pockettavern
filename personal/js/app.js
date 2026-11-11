@@ -1,7 +1,7 @@
 import * as db from './db.js';
 import * as V from './vault.js';
 import { parseCardFile, blobToAvatar, exportCardPng, toV2, isPng, normalizeCard } from './card.js';
-import { buildPrompt, macros } from './prompt.js';
+import { buildPrompt, postProcessMessages, macros } from './prompt.js';
 import { PROVIDERS, TEXT_SERVERS, diagnose, generate, listModels, generateImage, ttsAudio, listElevenVoices, embed, blobToDataUrl } from './api.js';
 import { INSTRUCT_TEMPLATES, INSTRUCT_FIELDS, importInstruct, messagesToText } from './instruct.js';
 import * as X from './extras.js';
@@ -200,7 +200,7 @@ function promptFor(chat, char, history, opts = {}) {
     names: groupMembers().map((c) => c.name).join(', '),
     nameOf: (m) => (m.role === 'user' ? (activePersona().name || 'User') : ((S.members.get(m.charId) || {}).name || m.name || char.name)),
   } : null;
-  return buildPrompt({
+  const built = buildPrompt({
     char, persona: activePersona(), settings: S.settings, chat, history,
     preset: activePreset(), lorebooks: S.lorebooks, regexScripts: scriptsFor(char),
     model: conn && conn.model, embeddedEntries: char._embedded || embeddedEntries(char),
@@ -211,6 +211,8 @@ function promptFor(chat, char, history, opts = {}) {
     vision: S.settings.ext.vision,
     recall: opts.recall ? { text: opts.recall, depth: S.settings.ext.recall.depth, template: S.settings.ext.recall.template } : null,
   });
+  if (conn?.provider !== 'textcomp') built.messages = postProcessMessages(built.messages, activePreset()?.postProcessing || 'none');
+  return built;
 }
 
 // ---------- chat recall (ST "Vector Storage") ----------
@@ -3891,6 +3893,11 @@ function renderPresetView(id) {
     <main class="scroll pad">
       ${S.settings.activePreset !== id ? `<button class="banner warn" data-action="preset-activate" data-id="${id}">This preset isn't active. Tap to use it.</button>` : ''}
       <p class="hint">Switch prompts on and off like SillyTavern's prompt manager. Tap a name to read or edit it.</p>
+      <label class="field"><span class="label">Chat Completion post-processing</span>
+        <select data-change="preset-post-processing" data-id="${esc(p.id)}">
+          ${[['none','None'],['merge','Merge consecutive'],['semi-strict','Semi-Strict'],['strict','Strict']].map(([value,label]) => `<option value="${value}" ${(p.postProcessing || 'none') === value ? 'selected' : ''}>${label}</option>`).join('')}
+        </select><span class="hint">Per preset. Semi-Strict merges adjacent equal-role messages; Strict also groups system instructions at the front. This can change injection placement. It does not bypass provider filtering.</span>
+      </label>
       ${(() => { const n = (p.raw?.extensions?.regex_scripts || []).length; return n ? `<label class="toggle"><span><span class="label">Run this preset's ${n} regex script${n === 1 ? '' : 's'}</span><span class="hint">Bundled in the preset file, like SillyTavern's preset regex.</span></span><input type="checkbox" data-preset-rx="1" ${p.runPresetRegex === false ? '' : 'checked'}><i></i></label>` : ''; })()}
       <input class="search" type="search" placeholder="Search prompts" value="${esc(S.pmQuery || '')}" data-input="pm-search">
       <div class="pm-list">
@@ -5293,7 +5300,12 @@ document.addEventListener('change', (e) => {
     return;
   }
   const c = el.dataset.change;
-  if (c === 'select-conn') {
+  if (c === 'preset-post-processing') {
+    const preset = presetById(el.dataset.id);
+    preset.postProcessing = el.value;
+    savePresets();
+    toast('Post-processing: ' + el.options[el.selectedIndex].text);
+  } else if (c === 'select-conn') {
     if (el.value === '__new') newConnection();
     else S.settings.activeConnection = el.value;
     saveSettings();
