@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.7)';
+const VERSION = '1.9.10 (UI + Narrative 0.8)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -778,6 +778,7 @@ async function runDatabase(chat, { rebuild = false, flush = false, silent = fals
 Treat this database as LONG-TERM STORY MEMORY, not a transcript or scene inventory.
 Before returning the FULL database, audit BOTH the inherited text and new material:
 - KEEP lasting changes to relationships, characterization, trust, trauma, knowledge, secrets, consequential choices, timeline-specific history, world mechanics, open mysteries, promises, and real deadlines.
+- KEEP privately established feelings, emotional meaning, explicit refusals, concealed attachments, differing interpretations, and unresolved relational conflicts even when no physical action follows. Do not flatten shame or humiliation into generic discomfort.
 - KEEP an ordinary action only for its lasting meaning. Example: Jason notices Catrin's malnourishment and carefully paces her food because of his own childhood experience. Do NOT preserve pastrami, sandwich placement, which bite was fed, foil, stove, or kitchen choreography.
 - KEEP a confession or change in intimacy; omit step-by-step kissing, sex, clothing, gestures, and other physical choreography unless a specific detail has an established lasting consequence.
 - KEEP a location, object, time, code, or precise number ONLY when it affects future decisions, access, a deadline, an unresolved plot, or a meaningful outcome. Remove expired logistics, minor inventory, ordinary meals, and decorative measurements.
@@ -792,7 +793,21 @@ Before returning the FULL database, audit BOTH the inherited text and new materi
 - MYSTERY AUDIT: Include only explicitly raised or inherited genuinely unresolved questions. Do not manufacture ambiguities by treating two explicitly separate timeline branches as potentially the same. If a timeline distinction is established, retain it without inventing a reconciliation question.
 - FINAL SELF-CHECK: Re-read the entire output for scene-by-scene trivia, duplicate facts, timeline conflation, and premature deadline status. Cut the trivia and correct statuses before returning the FULL database; never replace the output with a patch.
 </retention_filter>`;
-      const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} });
+      // Narrative 0.8: always apply to saved/custom prompts, not just new installs.
+      const emotionalContinuity = `
+<emotional_continuity_priority>
+This is STORY memory. Protect the psychological causes of behavior, not merely the observable actions.
+- Track for each central character: privately established desires, fears, shame, affection, resentment, beliefs about others, boundaries, concealed feelings, and reasons for silence or refusal. Record only what the source establishes, not plausible guesses.
+- Distinguish objective events from each person's interpretation, and private thoughts from spoken disclosures. A character may accurately understand someone's original intent while misunderstanding their current feelings. Do not resolve different perspectives into one supposed truth.
+- Preserve emotional causality: what an action means to someone, WHY a boundary was set, what hurt, what was misunderstood, and how it affects the relationship. Do not replace "feels like a whore" with "uncomfortable with money" when that stronger self-perception is explicitly established. Preserve precise emotionally important language without asserting it as an objective label.
+- If someone explicitly refuses money, intimacy, help, or a promise, record the refusal and its established reason. Later possession or acceptance under pressure does not erase the refusal or imply consent, gratitude, or reconciliation.
+- Keep ongoing emotional tensions across scene changes and checkpoint rewrites until the original messages actually resolve them. Do not declare a conflict settled just because characters move on, become intimate, or act kindly.
+- Protect who knows what: inner narration is not dialogue and must not become another character's knowledge.
+- Attribute quotations, requests, memories, notes, keepsakes, and messages to their actual source. Words written on an object are not something its author necessarily said aloud. Do not invent conversations, intentions, or emotional resolutions.
+- When compressing, cut routine movement, object placement, inventories, and choreography before emotional turning points or consequential interpersonal nuance. A relationship entry may need several sentences when distinct private perspectives and unresolved conflict would otherwise be lost.
+- Before returning the full database, check each major relationship for: each party's established private perspective; important unspoken feelings; explicit refusals and boundaries; unresolved misunderstandings; and what changed in the latest batch. Keep these as sourced character states, not omniscient judgments.
+</emotional_continuity_priority>`;
+      const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} }) + emotionalContinuity;
       const priorSignature = NDB.fingerprint(chat.messages, batch.end);
       const batchStartedAt = Date.now();
       let result;
