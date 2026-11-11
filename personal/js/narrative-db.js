@@ -27,19 +27,28 @@ Update the complete Narrative Database using the previous database and new rolep
 - **Source attribution:** Never convert a written note, keepsake, text, memory, inference, or imagined dialogue into a conversation or request. Track who actually spoke, wrote, thought, witnessed, or learned each consequential claim.
 - **Source precedence:** New original RP messages may establish or explicitly correct a fact. Prior database text provides accumulated history, but is not permission to add new inferences. When deleting duplicate prose, preserve the most accurately qualified form of the fact.
 
+## SOURCE-GROUNDED UPDATES — NO FACT PROMOTION
+
+- The previous database is a fallible summary, NOT a source transcript. Preserve its well-supported continuity provisionally, but do not treat its confident wording as independent proof. Do not amplify an unverified inherited claim into additional sections or attribute it to spoken dialogue.
+- **New fact gate:** Before ADDING any concrete biographical, medical, reproductive, sexual-history, legal, financial, family, or relationship fact, locate its explicit support in the newly supplied ORIGINAL RP messages. If it is not there, DO NOT add it. A plausible inference, trope, model completion, or prior summary's suggestion is not support.
+- Never invent contraception, sterilization, fertility status, pregnancy risk, diagnoses, surgery, medication, family relationships, or offscreen history. Silence about a medical fact means UNKNOWN, not yes or no. A character saying someone is on birth control does not establish another person's fertility or medical history.
+- When new original messages contradict a prior database assertion, correct the assertion EVERYWHERE (Chronicle, dossiers, Web, Ledger), not only in the newest entry. Do not repeat the discarded claim as an alternative unless a character actually believes it and that mistaken belief matters.
+- **No manufactured dialogue:** Never write that someone said, confessed, admitted, promised, or learned a detail unless an original message explicitly contains that communication. Internal thoughts and narrative implications are not speech.
+- At the end, examine each NEW named fact and quoted claim. If its support is absent from the new RP batch, remove it. Do not invent facts to make a scene seem more coherent.
+
 ## SINGLE SOURCE OF TRUTH / SECTION OWNERSHIP
 
-**Each consequential fact should have one primary home.** Other sections may mention only the current implication, not retell the underlying event. Apply this rule to existing database text as well as new updates.
+**Each consequential fact must have exactly one primary home.** Other sections may mention only the current implication, not retell the underlying event. Apply this rule to existing database text as well as new updates.
 
 - **Chronicle owns history:** What happened, when, to whom, who revealed what, and lasting outcomes. Put death tolls, timeline branches, causes, decisive choices, and irreversible changes here once. Compress old scenes into outcomes, not play-by-play accounts. Never copy full history into other sections.
-- **Dossiers own character state:** Only the changes a person carries into subsequent scenes—current condition, new knowledge/secrets, consequential personal choices, private feelings and beliefs that drive behavior, explicit boundaries, open goals, and a few key items. Do not retell their chronological history or restate events recorded in the Chronicle. One terse line may identify the resulting change.
+- **Dossiers own character state, NOT event summaries:** Keep dossiers sharply shorter than the Chronicle. Only the changes a person carries into subsequent scenes—current condition, new knowledge/secrets, consequential personal choices, private feelings and beliefs that drive behavior, explicit boundaries, open goals, and a few key items. Do not retell their chronological history, sequence multiple scenes, or restate events recorded in the Chronicle. Use short state fragments rather than event-by-event paragraphs. A dossier's Developments field should normally be 1–4 concise state-focused bullets, not a life-story recap. One terse line may identify the resulting change.
 - **The Web owns relationship state:** What is now different between the EXACT named people (trust, commitment, estrangement, explicitly established private feelings, differing interpretations, boundaries, promises, and unresolved emotional conflict). Do not confuse parties or assign inferred motives. Not an account of conversations, gifts, meals, or movements that produced that state.
 - **World Mechanics owns persistent mechanics:** Novel RP-specific rules, unusual setting constraints, and operative technology. NOT the plot history in which they were discovered. A timeline's death toll and war progression belong in the Chronicle; mechanisms such as the Mother Box leak belong here.
 - **The Ledger owns only established unfinished business:** Questions explicitly raised in the story or inherited from the prior database, and real active tasks with their own owners/deadlines. There is NO Resolved Threads section. When a thread closes, put its important outcome in the Chronicle, Web, Dossiers, or World Mechanics once; otherwise drop it. Remove old Resolved Threads headings and entries after moving any unique consequential facts to their proper home.
 - **Active Theatre owns the next beat:** Short scene orientation only. No inventory, emotional retelling, or long recap.
 - **Recent Log is a handoff:** Up to three new changes needed for the next RP reply, not a second history. Skip anything already clear from Active Theatre unless it prevents a continuity mistake. Zero entries is fine.
 
-Before writing, notice repeated facts in the incoming database and consolidate them into their primary home. Move unique significant facts out of any inherited Resolved Threads before deleting that section. Never delete the **only** instance of a consequential fact. Avoid compensating for shorter dossiers by inflating the Chronicle, Ledger, or World Mechanics.
+Before writing, move ALL chronological event narration out of dossiers and into the Chronicle; preserve only the current lasting character state in dossiers. Notice repeated facts in the incoming database and consolidate them into their primary home. Move unique significant facts out of any inherited Resolved Threads before deleting that section. Never delete the **only** instance of a consequential fact. Avoid compensating for shorter dossiers by inflating the Chronicle, Ledger, or World Mechanics.
 
 ## WRITING & COMPRESSION RULES
 
@@ -69,7 +78,7 @@ Only RP-specific changes and necessary live state for relevant characters, inclu
 
 **[Name]**
 - **Current:** Where they are, condition, immediate goal, if important.
-- **Developments:** Consequential things they did, learned, suffered, decided, confessed, or changed during this RP. Do not retell full events already recorded in the Chronicle.
+- **Developments:** Short bullets describing durable changes in feelings, choices, condition, or behavior. NO chronology, no long chains of actions, no recaps of conversations or intimate scenes. Put what happened and how it happened in the Chronicle.
 - **Knowledge / Secrets:** What they know, suspect, or do not know; maintain private knowledge boundaries.
 - **Open:** Unresolved personal objective or consequence, if any.
 - **Key Items:** Only evidence, objects, or possessions with continuing plot relevance.
