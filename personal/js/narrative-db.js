@@ -23,6 +23,8 @@ Update the complete Narrative Database using the previous database and new rolep
 - **Secrets and knowledge:** A reader's inference is not a character's knowledge. Only record a character as knowing a fact if they saw it, were told, or established it in the RP. Preserve who has NOT learned something.
 - **Objects and identifiers:** Preserve redactions and unknown destinations. A shipment marked "[ORBITAL]" is not "Watchtower" unless the RP explicitly confirms it. Keep exact names, recipients, quantities, and codes when plot-relevant.
 - **No new mysteries:** Put a question in Unresolved Threads only if the RP explicitly raised it or the previous database already established it as consequential and open. Do not invent possible conspiracies, hidden motives, unanswered questions, or speculative threads to fill the Ledger.
+- **Emotional continuity:** Explicit private thoughts, feelings, shame, hopes, fears, refusals, and withheld confessions are consequential facts when they explain character choices or relationship tension. Keep the emotional meaning, not just the physical event. Distinguish what each person believes from what happened and from what the other person knows. Preserve unresolved mismatches until actually resolved.
+- **Source attribution:** Never convert a written note, keepsake, text, memory, inference, or imagined dialogue into a conversation or request. Track who actually spoke, wrote, thought, witnessed, or learned each consequential claim.
 - **Source precedence:** New original RP messages may establish or explicitly correct a fact. Prior database text provides accumulated history, but is not permission to add new inferences. When deleting duplicate prose, preserve the most accurately qualified form of the fact.
 
 ## SINGLE SOURCE OF TRUTH / SECTION OWNERSHIP
@@ -30,8 +32,8 @@ Update the complete Narrative Database using the previous database and new rolep
 **Each consequential fact should have one primary home.** Other sections may mention only the current implication, not retell the underlying event. Apply this rule to existing database text as well as new updates.
 
 - **Chronicle owns history:** What happened, when, to whom, who revealed what, and lasting outcomes. Put death tolls, timeline branches, causes, decisive choices, and irreversible changes here once. Compress old scenes into outcomes, not play-by-play accounts. Never copy full history into other sections.
-- **Dossiers own character state:** Only the changes a person carries into subsequent scenes—current condition, new knowledge/secrets, consequential personal choices, open goals, and a few key items. Do not retell their chronological history or restate events recorded in the Chronicle. One terse line may identify the resulting change.
-- **The Web owns relationship state:** What is now different between the EXACT named people (trust, commitment, estrangement, confirmed feelings, promises). Do not confuse parties or assign inferred motives. Not an account of conversations, gifts, meals, or movements that produced that state.
+- **Dossiers own character state:** Only the changes a person carries into subsequent scenes—current condition, new knowledge/secrets, consequential personal choices, private feelings and beliefs that drive behavior, explicit boundaries, open goals, and a few key items. Do not retell their chronological history or restate events recorded in the Chronicle. One terse line may identify the resulting change.
+- **The Web owns relationship state:** What is now different between the EXACT named people (trust, commitment, estrangement, explicitly established private feelings, differing interpretations, boundaries, promises, and unresolved emotional conflict). Do not confuse parties or assign inferred motives. Not an account of conversations, gifts, meals, or movements that produced that state.
 - **World Mechanics owns persistent mechanics:** Novel RP-specific rules, unusual setting constraints, and operative technology. NOT the plot history in which they were discovered. A timeline's death toll and war progression belong in the Chronicle; mechanisms such as the Mother Box leak belong here.
 - **The Ledger owns only established unfinished business:** Questions explicitly raised in the story or inherited from the prior database, and real active tasks with their own owners/deadlines. There is NO Resolved Threads section. When a thread closes, put its important outcome in the Chronicle, Web, Dossiers, or World Mechanics once; otherwise drop it. Remove old Resolved Threads headings and entries after moving any unique consequential facts to their proper home.
 - **Active Theatre owns the next beat:** Short scene orientation only. No inventory, emotional retelling, or long recap.
@@ -46,7 +48,7 @@ Before writing, notice repeated facts in the incoming database and consolidate t
 - Preserve precise consequential numbers, names, identifiers, dates, and timelines. Never trade an exact established fact for vague phrasing merely to save space.
 - Group related minor events by their lasting outcome; drop routine motion, meal details, clothing, repeated reactions, and minute-by-minute action once the scene ends. Preserve exact chronology only where order or timing changes the plot. Compress wording, **not** significant information.
 - Refer to an event outside its primary section only when essential to the section's purpose; describe its result in a short phrase rather than restating its sequence.
-- On every update, trim inherited bloat, including the old Chronicle. Existing prose is not sacred; established facts are. Summarize a resolved visit or conversation in one brief outcome statement, not five equal-length sentences. A past checkpoint's incidental detail is not automatically worth retaining.
+- On every update, trim inherited bloat, including the old Chronicle. Existing prose is not sacred; established facts are. Summarize a resolved visit or conversation in one brief outcome statement, not five equal-length sentences. A past checkpoint's incidental detail is not automatically worth retaining. An unresolved emotional wound, private belief, or explicit refusal is not incidental and must survive until the source resolves it.
 - No fixed total token ceiling or historical-event count. Database growth should track meaningful new developments, not message count.
 
 ## REQUIRED OUTPUT
@@ -76,7 +78,7 @@ Omit unused fields. Do not restate standard lorebook biography, abilities, voice
 
 ## THE WEB
 
-Each significant RP-established relationship or **change to an existing relationship** once, **typically one short sentence**:
+Each significant RP-established relationship or **change to an existing relationship** once, **as briefly as possible without losing either person's established perspective**:
 - **A ↔ B:** Compact statement of current trust, conflict, affection, promises, differing feelings, or knowledge, with major changes where necessary.
 
 Skip static baseline relationships already covered by the lorebook. Preserve persistent relationship changes when characters are absent.
@@ -98,7 +100,7 @@ Only unfinished plans with their actual owner, actual deadline (if any), and sta
 ### Historical Record
 Cumulative record of **significant RP events**, earliest first. Preserve consequential outcomes, causality, revelations, timeline branches, exact stakes, and lasting character or relationship developments indefinitely. A devastating death toll or crucial revelation remains even if it does not affect the next scene.
 
-Merge old scenes by meaningful result. One compact entry may cover a whole visit or conversation; include decisive words or exact times only if they affect later events. Give wars, major discoveries, and irreversible choices more room than routine scenes. Preserve cause and effect, protected numbers, dates, identities, and unknowns. Drop old play-by-play details, not major facts. No fixed entry count.
+Merge old scenes by meaningful result. One compact entry may cover a whole visit or conversation; preserve consequential emotional meaning and explicit refusals, and include decisive words or exact times when they affect later events. Give wars, major discoveries, and irreversible choices more room than routine scenes. Preserve cause and effect, protected numbers, dates, identities, and unknowns. Drop old play-by-play details, not major facts. No fixed entry count.
 
 ### Recent Log
 Zero to three fresh **changes needed for the next reply**, newest first. Use short notes, not beat-by-beat actions or Chronicle duplicates. When an item becomes old, keep its lasting outcome in the proper section and drop the handoff note.
