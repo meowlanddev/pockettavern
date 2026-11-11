@@ -818,7 +818,7 @@ This is STORY memory. Protect the psychological causes of behavior, not merely t
 - When compressing, cut routine movement, object placement, inventories, and choreography before emotional turning points or consequential interpersonal nuance. A relationship entry may need several sentences when distinct private perspectives and unresolved conflict would otherwise be lost.
 - Before returning the full database, check each major relationship for: each party's established private perspective; important unspoken feelings; explicit refusals and boundaries; unresolved misunderstandings; and what changed in the latest batch. Keep these as sourced character states, not omniscient judgments.
 </emotional_continuity_priority>`;
-      const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} }) + emotionalContinuity;
+      const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} }) + emotionalContinuity + structuralAudit;
       const priorSignature = NDB.fingerprint(chat.messages, batch.end);
       const batchStartedAt = Date.now();
       let result;
