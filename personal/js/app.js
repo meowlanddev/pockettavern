@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.8)';
+const VERSION = '1.9.10 (UI + Narrative 0.9)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3739,6 +3739,8 @@ function renderSettingsView(open) {
       <div class="settings-content">
         ${selected ? `<h2 class="settings-content-title">${selected.label}</h2>${categoryContent}` : `<h2 class="settings-content-title">Settings</h2><p class="hint">Choose a category to see its options.</p><div class="settings-mobile-categories">${categoryLinks}</div>`}
         <p class="muted small center">${BUILD_NAME + ' — ' + VERSION}</p>
+        <div class="row center" style="justify-content:center; margin-top:8px"><button class="btn" data-action="force-refresh">↻ Force Refresh App</button></div>
+        <p class="muted small center">Refreshes app files only; keeps chats and settings.</p>
         <div class="bottom-space"></div>
       </div>
     </main>`;
@@ -4351,6 +4353,28 @@ function mergeSettings(local, theirs, theirsNewer) {
 
 // ---------- event wiring ----------
 const actions = {
+  'force-refresh': async (el) => {
+    if (S.dbBusy || S.generating) return toast('Finish the current generation or database update before refreshing.', 5000);
+    el.disabled = true;
+    el.textContent = 'Refreshing…';
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter(k => k.startsWith('pockettavern-combined-ui-preview-')).map(k => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (registration) await registration.update();
+      }
+      const url = new URL(location.href);
+      url.searchParams.set('app_refresh', String(Date.now()));
+      location.replace(url.href);
+    } catch (error) {
+      el.disabled = false;
+      el.textContent = '↻ Force Refresh App';
+      throw error;
+    }
+  },
   go: (el) => go(el.dataset.to),
   'go-back': () => { if (route().name === 'settings' && settingsReturn) go(settingsReturn.hash); else if (history.length > 1) history.back(); else go('#/'); },
   'install-app': async () => {
