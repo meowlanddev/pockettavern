@@ -56,3 +56,5 @@ To build an APK, see [ANDROID.md](ANDROID.md).
 ## Development
 No build step. Serve the folder with any static server, e.g. `python3 -m http.server`.
 When you change files, bump `CACHE` in `sw.js`.
+
+<!-- Pages deployment retrigger for Personal Edition UI + Narrative 0.9; no application changes. -->
