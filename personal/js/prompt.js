@@ -317,3 +317,30 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     },
   };
 }
+
+/**
+ * Optional Chat Completion message normalization, selected per prompt preset.
+ * None preserves the assembled roles and insertion depths exactly.
+ * Semi-strict merges adjacent equal-role messages without moving any blocks.
+ * Strict additionally consolidates system instructions at the front, then
+ * merges adjacent equal-role messages to give APIs a cleaner role sequence.
+ * This is a structural compatibility option, not a moderation bypass.
+ */
+export function postProcessMessages(messages, mode = 'none') {
+  if (!['merge', 'semi-strict', 'strict'].includes(mode)) return messages;
+  const join = (items) => {
+    const out = [];
+    for (const msg of items) {
+      const prev = out[out.length - 1];
+      // Preserve multimodal payloads; do not flatten image attachments.
+      if (prev && prev.role === msg.role && !prev.images?.length && !msg.images?.length && typeof prev.content === 'string' && typeof msg.content === 'string') {
+        prev.content += '\\n\\n' + msg.content;
+      } else out.push({ ...msg });
+    }
+    return out;
+  };
+  if (mode !== 'strict') return join(messages);
+  const system = messages.filter(m => m.role === 'system');
+  const conversation = messages.filter(m => m.role !== 'system');
+  return join([...join(system), ...conversation]);
+}
