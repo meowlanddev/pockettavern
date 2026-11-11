@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.1)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -718,6 +718,7 @@ function databaseSheet() {
     <div class="row wrap">
       ${resumable ? `<button class="btn primary" data-action="ndb-resume" ${prog ? 'disabled' : ''}>▶ Resume partial rebuild</button>` : chat.narrativeDbLastError ? `<button class="btn primary" data-action="ndb-retry" ${prog ? 'disabled' : ''}>↻ Retry failed rebuild</button>` : ''}
       <button class="btn primary" data-action="ndb-update" ${prog || stale ? 'disabled' : ''}>Update from Last Checkpoint</button>
+      <button class="btn" data-action="ndb-rebuild-fresh" ${prog ? 'disabled' : ''}>Rebuild from Original Messages (Fresh)</button>
       <button class="btn" data-action="ndb-rebuild" ${prog ? 'disabled' : ''}>${resumable ? 'Rebuild from Saved Checkpoint' : 'Rebuild Changed History'}</button>
       ${prog ? '<button class="btn" data-action="ndb-cancel">Cancel after current batch</button>' : ''}
       <button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Database</button>
@@ -793,6 +794,16 @@ Before returning the FULL database, audit BOTH the inherited text and new materi
 - MYSTERY AUDIT: Include only explicitly raised or inherited genuinely unresolved questions. Do not manufacture ambiguities by treating two explicitly separate timeline branches as potentially the same. If a timeline distinction is established, retain it without inventing a reconciliation question.
 - FINAL SELF-CHECK: Re-read the entire output for scene-by-scene trivia, duplicate facts, timeline conflation, and premature deadline status. Cut the trivia and correct statuses before returning the FULL database; never replace the output with a patch.
 </retention_filter>`;
+      // Narrative 0.9.1: enforce section ownership and evidence even with a saved/custom prompt.
+      const structuralAudit = `
+<source_and_section_audit>
+- New medical, reproductive, contraception, surgery, fertility, family, legal, or relationship claims require explicit support in the NEW ORIGINAL CHAT MESSAGES. Do not infer or invent them.
+- A previous database is not an independent source of truth. Do not embellish inherited claims, or turn a prior summary into a newly spoken confession. If original messages explicitly contradict inherited memory, remove the wrong claim from ALL sections.
+- ENTITY DOSSIERS: concise CURRENT state, private knowledge, boundaries, durable feelings, open goals. Do not write a chronological story or a chain of scene beats in a dossier.
+- THE CHRONICLE: the sole owner of historical actions, conversations, turning points, and outcomes. Move inherited scene retellings out of dossiers; condense into significant chronological events once.
+- THE WEB: present relationship state only; no chronological recap.
+- Verify every newly added concrete claim against the incoming original messages before output. Omit unsupported details.
+</source_and_section_audit>`;
       // Narrative 0.8: always apply to saved/custom prompts, not just new installs.
       const emotionalContinuity = `
 <emotional_continuity_priority>
@@ -4609,6 +4620,11 @@ const actions = {
     const start = recovery?.covered || 0;
     const remaining = NDB.countBatches(chat.messages, start, S.settings.ext.database.batchTokens);
     if (confirm('Rebuild Narrative Database from the latest valid checkpoint (through message ' + start + ')? Estimated: ' + remaining + ' sequential model requests for the remaining ' + (chat.messages.length - start) + ' messages. Large histories can take a while and may incur API charges.' + (partial?.covered ? ' A valid partial rebuild will be reused when possible.' : '') + ' The current active database remains unchanged until the rebuild succeeds. Continue?')) runDatabase(chat, { rebuild: true, flush: true });
+  },
+  'ndb-rebuild-fresh': () => {
+    const chat = S.chat;
+    const batches = NDB.countBatches(chat.messages, 0, S.settings.ext.database.batchTokens);
+    if (confirm('Start a FRESH Narrative Database rebuild from message 1 (' + batches + ' estimated model requests)? This ignores ALL previous database checkpoints, including possibly invented facts. Your chat messages and current active database remain intact until the full rebuild succeeds. API charges may apply. Export your chat first as a backup. Continue?')) runDatabase(chat, { rebuild: true, flush: true, restart: true });
   },
   'ndb-cancel': () => { S.dbCancel = true; toast('Cancel requested — stopping after current API call.'); },
   'ndb-clear': async () => {
