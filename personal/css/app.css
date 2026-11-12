@@ -637,3 +637,10 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 
 /* Active Persona section heading above its selector. */
 .persona-active-heading { margin: 0 0 8px; font-size: 1.1rem; font-weight: 650; }
+
+/* Persona Library rows mirror the character library and remain fully clickable. */
+.persona-library-list { margin-top: 12px; }
+.persona-library-item { display: flex; width: 100%; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.persona-library-item.current { border-color: var(--accent); }
+.persona-library-item .ci-text { min-width: 0; flex: 1; }
+.persona-library-item .ci-name, .persona-library-item .ci-desc { display: block; }
