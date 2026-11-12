@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.12)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.13)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3758,7 +3758,7 @@ function renderSettingsView(open) {
     { id: 'data', label: 'Data & Backup', description: 'Import, export, sync and storage', sections: [{ id: 'data', title: 'Data & backup', body: dataBody }] }
   ];
   const selected = categories.find(c => c.id === route().a);
-  const sectionHtml = (section) => selected?.id === 'roleplay' && (section.id === 'characters' || section.id === 'chats') ? `<details class="section" data-sec="${section.id}" open><summary>${section.title}</summary><div class="sec-body">${section.body}</div></details>` : sec(section.id, section.title, section.body);
+  const sectionHtml = (section) => sec(section.id, section.title, section.body);
   const categoryLinks = categories.map(c => `<button class="settings-category-link ${selected?.id === c.id ? 'selected' : ''}" data-action="go" data-to="#/settings/${c.id}">
     <span class="settings-category-label">${c.label}</span><span class="settings-category-description">${c.description}</span>
     <span class="settings-category-chevron" aria-hidden="true">›</span></button>`).join('');
