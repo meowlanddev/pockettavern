@@ -1521,6 +1521,10 @@ async function renderLanding() {
     </header>
     <main class="scroll pad pt-landing">
       ${installBannerHtml()}
+      <input class="search" type="search" placeholder="Search characters, tags, creators" aria-label="Search character library" value="${esc(S.homeQuery || '')}" data-input="home-search">
+      ${(S.homeQuery || '').trim() ? `<div class="pt-home-results" aria-label="Character search results">
+        ${[...chars, ...S.groups.map(g => ({...g, isGroup: true}))].filter(c => `${c.name || ''} ${(c.tags || []).join(' ')} ${c.creator || ''}`.toLowerCase().includes(S.homeQuery.trim().toLowerCase())).map(c => `<button class="pt-home-result" data-action="go" data-to="#/chat/${esc(c.id)}">${esc(c.name || 'Unnamed character')}</button>`).join('') || '<p class="muted">No matching characters.</p>'}
+      </div>` : ''}
       <h2 class="pt-landing-heading">Pick up where you left off</h2>
       ${recent ? `<div class="pt-recent">
         <div class="row">${avatar}<div class="grow"><strong>${esc(recent.title || character?.name || group?.name || 'Recent chat')}</strong>
@@ -5275,7 +5279,7 @@ document.addEventListener('input', (e) => {
     S.homeQuery = el.value;
     clearTimeout(S.searchTimer);
     S.searchTimer = setTimeout(async () => {
-      await renderHome();
+      if (route().name === 'home') await renderLanding(); else await renderHome();
       const s = $('.search');
       if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
     }, 200);
