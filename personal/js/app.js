@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.9)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.10)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3559,16 +3559,20 @@ function renderSettingsView(open) {
       </div>
       <div class="grow persona-editor-fields">
         ${settingsField('Name', 'persona.name', 'text')}
-        <div class="field persona-lorebooks"><span class="label">Attached Lorebooks</span>
-          <details class="section persona-lorebook-picker"><summary>Choose Lorebooks</summary>
-            <div class="sec-body">
-              ${S.lorebooks.map((b) => `<label class="check" title="${esc(b.name)}"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}><span title="${esc(b.name)}">${esc(Array.from(b.name).length > 70 ? Array.from(b.name).slice(0, 70).join('') + '[...]' : b.name)}</span></label>`).join('') || '<span class="hint">No Lorebooks imported yet.</span>'}
-            </div>
-          </details>
-        </div>
+        <label class="field"><span class="label">Details</span>
+          <input type="text" data-bind="persona.details" value="${esc(persona.details || '')}" autocomplete="off">
+          <span class="hint">This is not sent to the AI.</span>
+        </label>
       </div>
     </div>
     ${settingsField('Description', 'persona.description', 'textarea', '', 'Who you are in the story. Sent to the AI.')}
+    <div class="field persona-lorebooks"><span class="label">Attached Lorebooks</span>
+      <details class="section persona-lorebook-picker"><summary>Choose Lorebooks</summary>
+        <div class="sec-body">
+          ${S.lorebooks.map((b) => `<label class="check" title="${esc(b.name)}"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}><span title="${esc(b.name)}">${esc(Array.from(b.name).length > 70 ? Array.from(b.name).slice(0, 70).join('') + '[...]' : b.name)}</span></label>`).join('') || '<span class="hint">No Lorebooks imported yet.</span>'}
+        </div>
+      </details>
+    </div>
     <div class="row wrap">
       <button class="btn sm" data-action="persona-export">${ICONS.download} Export persona</button>
       ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}
