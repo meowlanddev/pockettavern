@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.15)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.16)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3503,6 +3503,12 @@ function renderSettingsView(open) {
       <button class="btn" data-action="lb-new">${ICONS.plus} New Lorebook</button>
       <button class="btn" data-action="import-files">${ICONS.import} Import Lorebook</button>
     </div>
+    <hr class="persona-divider">
+    ${settingsField('Lorebook scan depth', 'prompt.wi_scan_depth', 'number', '', 'How many recent messages are scanned for keywords')}
+    ${settingsField('Lorebook budget (% of context)', 'prompt.wi_budget', 'number', '', '0 = no limit. Lower-order entries are dropped first')}
+    ${settingsField('Recursive lorebook scan', 'prompt.wi_recursion', 'checkbox', '', 'Entries can trigger other entries')}
+    ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}
+    <hr class="persona-divider">
     ${S.lorebooks.map((b) => {
       const where = [b.global ? 'global' : '', S.settings.personas.filter((x) => (x.lorebooks || []).includes(b.id)).map((x) => 'persona: ' + x.name).join(', ')].filter(Boolean).join(' · ');
       return `<div class="list-row">
@@ -3530,16 +3536,12 @@ function renderSettingsView(open) {
     </div>`;
 
   const promptBody = `
-    <p class="hint">The main and post-history prompts are used by the Simple preset. The two “Use character’s…” switches and the scan depth apply to every preset.</p>
+    <p class="hint">The main and post-history prompts are used by the Simple preset. The two “Use character’s…” switches apply to every preset. Lorebook scanning options are under Roleplay & Content → Lorebooks.</p>
     ${settingsField('Main prompt', 'prompt.main', 'textarea', '', 'Sent first, before the character description.')}
     <button class="btn sm" data-action="reset-main">Reset main prompt</button>
     ${settingsField('Post-history instructions', 'prompt.post_history', 'textarea', '', 'Sent after the chat history, every turn (a.k.a. jailbreak / author’s note).')}
     ${settingsField('Use character’s system prompt', 'prompt.prefer_card_system', 'checkbox', '', 'If a card has one, it replaces the main prompt.')}
-    ${settingsField('Use character’s post-history instructions', 'prompt.prefer_card_post_history', 'checkbox')}
-    ${settingsField('Lorebook scan depth', 'prompt.wi_scan_depth', 'number', '', 'How many recent messages are scanned for keywords')}
-    ${settingsField('Lorebook budget (% of context)', 'prompt.wi_budget', 'number', '', '0 = no limit. Lower-order entries are dropped first')}
-    ${settingsField('Recursive lorebook scan', 'prompt.wi_recursion', 'checkbox', '', 'Entries can trigger other entries')}
-    ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}`;
+    ${settingsField('Use character’s post-history instructions', 'prompt.prefer_card_post_history', 'checkbox')}`;
 
   const personaBody = `
     <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself.</p>
