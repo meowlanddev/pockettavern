@@ -1481,6 +1481,29 @@ async function render() {
 }
 window.addEventListener('hashchange', render);
 
+// Install banner dismissal is stored on this device, independent of chats and app settings.
+const INSTALL_BANNER_DISMISSED_KEY = 'pockettavern-install-banner-dismissed';
+function installBannerDismissed() {
+  try { return localStorage.getItem(INSTALL_BANNER_DISMISSED_KEY) === '1'; } catch { return false; }
+}
+function installBannerHtml() {
+  if (isStandalone || installBannerDismissed()) return '';
+  const content = isIOS
+    ? `Install: tap <b>Share</b> ${ICONS.share} then <b>Add to Home Screen</b> for the full-screen app.`
+    : installPrompt
+      ? 'Install: tap here to add <b>PocketTavern</b> to your home screen as a full-screen app.'
+      : isAndroid
+        ? 'Install: open the browser menu <b>⋮</b> and tap <b>Add to Home screen</b> (or <b>Install app</b>) for the full-screen app.'
+        : '';
+  if (!content) return '';
+  return `<div class="pt-install-banner">
+    ${installPrompt && !isIOS
+      ? `<button class="pt-install-message" data-action="install-app">${content}</button>`
+      : `<div class="pt-install-message">${content}</div>`}
+    <button class="pt-install-dismiss" data-action="dismiss-install-banner" aria-label="Dismiss install suggestion" title="Dismiss">×</button>
+  </div>`;
+}
+
 // ---------- LANDING ----------
 // This page reads existing records only; no chat or persona data is rewritten.
 async function renderLanding() {
@@ -1497,6 +1520,7 @@ async function renderLanding() {
       <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
     </header>
     <main class="scroll pad pt-landing">
+      ${installBannerHtml()}
       <h2 class="pt-landing-heading">Pick up where you left off</h2>
       ${recent ? `<div class="pt-recent">
         <div class="row">${avatar}<div class="grow"><strong>${esc(recent.title || character?.name || group?.name || 'Recent chat')}</strong>
@@ -1558,9 +1582,7 @@ async function renderHome() {
       <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
     </header>
     <main class="scroll pad">
-      ${isIOS && !isStandalone ? `<div class="banner">Install: tap <b>Share</b> ${ICONS.share} then <b>Add to Home Screen</b> for the full-screen app.</div>` : ''}
-      ${!isIOS && !isStandalone && installPrompt ? `<button class="banner" data-action="install-app">Install: tap here to add <b>PocketTavern</b> to your home screen as a full-screen app.</button>` : ''}
-      ${isAndroid && !isStandalone && !installPrompt ? `<div class="banner">Install: open the browser menu <b>⋮</b> and tap <b>Add to Home screen</b> (or <b>Install app</b>) for the full-screen app.</div>` : ''}
+      ${installBannerHtml()}
       ${!connReady(conn) ? `<button class="banner warn" data-action="go" data-to="#/settings/connection">No API connection yet — tap to set up OpenRouter, Claude or another API.</button>` : ''}
       ${all.length ? `
         <input class="search" type="search" placeholder="Search characters, tags, creators" value="${esc(S.homeQuery || '')}" data-input="home-search">
@@ -4453,6 +4475,10 @@ const actions = {
   },
   go: (el) => go(el.dataset.to),
   'go-back': () => { if (route().name === 'settings') return go(route().a ? '#/settings' : (settingsReturn?.hash || lastChatRoute || '#/')); if (route().name === 'search' && route().a && S.chat) return go(lastChatRoute || '#/'); go('#/'); },
+  'dismiss-install-banner': () => {
+    try { localStorage.setItem(INSTALL_BANNER_DISMISSED_KEY, '1'); } catch { /* storage may be disabled */ }
+    document.querySelectorAll('.pt-install-banner').forEach(el => el.remove());
+  },
   'install-app': async () => {
     const p = installPrompt;
     if (!p) return;
