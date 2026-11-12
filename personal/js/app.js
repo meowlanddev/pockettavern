@@ -5173,7 +5173,7 @@ const actions = {
     S.settings.personas.push(p);
     S.settings.activePersona = p.id;
     saveSettings();
-    go('#/settings/persona');
+    go('#/settings/roleplay');
   },
   'settings-chat-library': async () => {
     const chats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
