@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.10)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.11)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -1470,7 +1470,7 @@ async function render() {
     else if (r.name === 'qr' && r.a) renderQrView(r.a);
     else if (r.name === 'search') await renderSearchView(r.a);
     else if (r.name === 'lorebook' && r.a) renderLorebookView(r.a);
-    else if (r.name === 'settings') renderSettingsView(r.a);
+    else if (r.name === 'settings') { S.settingsChats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); renderSettingsView(r.a); }
     else await renderHome();
   } catch (e) {
     console.error(e);
@@ -3548,8 +3548,8 @@ function renderSettingsView(open) {
       <button class="btn" data-action="persona-import">${ICONS.import} Import persona</button>
     </div>
     <hr class="persona-divider">
-    <label class="field" id="persona-library-heading"><span class="label persona-active-title">Active Persona</span>
-      <select data-change="select-persona" aria-label="Active Persona">
+    <h3 id="persona-library-heading" class="persona-active-heading">Active Persona</h3>
+    <label class="field"><select data-change="select-persona" aria-label="Active Persona">
         ${S.settings.personas.map((x) => `<option value="${x.id}" ${x.id === persona.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
       </select></label>
     <div class="row persona-editor-row">
@@ -3741,19 +3741,24 @@ function renderSettingsView(open) {
     <p class="hint" id="storage-info">Everything is stored on this device only. Export a backup now and then.</p>
     <button class="btn danger sm" data-action="wipe">Delete all data</button>`;
 
+  const latestChat = S.settingsChats?.[0];
+  const chatsBody = `<p class="hint">Chats can be exported by opening the chat and clicking the icon on the left of the chat box.</p>
+    <div class="row wrap"><button class="btn" data-action="settings-recent-chat" ${latestChat ? '' : 'disabled'}>Most recent chat${latestChat ? ': ' + esc(latestChat.title || 'Untitled chat') : ''}</button></div>
+    <div class="row wrap"><button class="btn" data-action="settings-chat-library">Open chat library</button>
+      <button class="btn" data-action="settings-import-chat">${ICONS.import} Import chat</button></div>`;
   const charactersBody = `<p class="hint">Manage your character library, groups and conversations.</p>
     <div class="row wrap"><button class="btn" data-action="go" data-to="#/">Open character library</button>
     <button class="btn" data-action="import-files">${ICONS.import} Import characters</button></div>`;
 
   const categories = [
     { id: 'ai', label: 'Connection & AI', description: 'Connection, models, generation, presets, prompts and formatting', sections: [{ id: 'connection', title: 'API connection', body: connBody }, { id: 'preset', title: 'Preset (prompt manager)', body: presetBody }, { id: 'generation', title: 'Generation', body: genBody }, { id: 'formatting', title: 'Formatting (text completion)', body: fmtBody }, { id: 'prompt', title: 'Prompts (Simple preset)', body: promptBody }] },
-    { id: 'roleplay', label: 'Roleplay & Content', description: 'Characters, personas, lorebooks and quick replies', sections: [{ id: 'characters', title: 'Characters', body: charactersBody }, { id: 'persona', title: 'Personas', body: personaBody }, { id: 'lorebooks', title: 'Lorebooks', body: lorebookBody }, { id: 'qr', title: 'Quick replies', body: qrBody }] },
+    { id: 'roleplay', label: 'Roleplay & Content', description: 'Chats, characters, personas, lorebooks and quick replies', sections: [{ id: 'chats', title: 'Chats', body: chatsBody }, { id: 'characters', title: 'Characters', body: charactersBody }, { id: 'persona', title: 'Personas', body: personaBody }, { id: 'lorebooks', title: 'Lorebooks', body: lorebookBody }, { id: 'qr', title: 'Quick replies', body: qrBody }] },
     { id: 'extensions', label: 'Extensions', description: 'Memory, regex scripts, images, audio and writing', sections: [{ id: 'ext', title: 'Built-in extensions', body: extBody }, { id: 'regex', title: 'Regex scripts', body: regexBody }] },
     { id: 'appearance', label: 'Appearance & Interface', description: 'Themes, typography and chat display', sections: [{ id: 'appearance', title: 'Appearance', body: apBody }, { id: 'ui', title: 'Interface', body: uiBody }] },
     { id: 'data', label: 'Data & Backup', description: 'Import, export, sync and storage', sections: [{ id: 'data', title: 'Data & backup', body: dataBody }] }
   ];
   const selected = categories.find(c => c.id === route().a);
-  const sectionHtml = (section) => selected?.id === 'roleplay' && section.id === 'characters' ? `<details class="section" data-sec="characters" open><summary>Characters</summary><div class="sec-body">${section.body}</div></details>` : sec(section.id, section.title, section.body);
+  const sectionHtml = (section) => selected?.id === 'roleplay' && (section.id === 'characters' || section.id === 'chats') ? `<details class="section" data-sec="${section.id}" open><summary>${section.title}</summary><div class="sec-body">${section.body}</div></details>` : sec(section.id, section.title, section.body);
   const categoryLinks = categories.map(c => `<button class="settings-category-link ${selected?.id === c.id ? 'selected' : ''}" data-action="go" data-to="#/settings/${c.id}">
     <span class="settings-category-label">${c.label}</span><span class="settings-category-description">${c.description}</span>
     <span class="settings-category-chevron" aria-hidden="true">›</span></button>`).join('');
