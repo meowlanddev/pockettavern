@@ -3723,23 +3723,23 @@ function renderSettingsView(open) {
     <p class="hint" id="storage-info">Everything is stored on this device only. Export a backup now and then.</p>
     <button class="btn danger sm" data-action="wipe">Delete all data</button>`;
 
+  const charactersBody = `<p class="hint">Manage your character library, groups and conversations.</p>
+    <div class="row wrap"><button class="btn" data-action="go" data-to="#/">Open character library</button>
+    <button class="btn" data-action="import-files">Import characters</button></div>`;
+
   const categories = [
     { id: 'ai', label: 'Connection & AI', description: 'Connection, models, generation, presets, prompts and formatting', sections: [{ id: 'connection', title: 'API connection', body: connBody }, { id: 'preset', title: 'Preset (prompt manager)', body: presetBody }, { id: 'generation', title: 'Generation', body: genBody }, { id: 'formatting', title: 'Formatting (text completion)', body: fmtBody }, { id: 'prompt', title: 'Prompts (Simple preset)', body: promptBody }] },
-    { id: 'roleplay', label: 'Roleplay & Content', description: 'Characters, personas, lorebooks and quick replies', sections: [{ id: 'persona', title: 'Persona (you)', body: personaBody }, { id: 'lorebooks', title: 'Lorebooks', body: lorebookBody }, { id: 'qr', title: 'Quick replies', body: qrBody }] },
+    { id: 'roleplay', label: 'Roleplay & Content', description: 'Characters, personas, lorebooks and quick replies', sections: [{ id: 'characters', title: 'Characters', body: charactersBody }, { id: 'persona', title: 'Personas', body: personaBody }, { id: 'lorebooks', title: 'Lorebooks', body: lorebookBody }, { id: 'qr', title: 'Quick replies', body: qrBody }] },
     { id: 'extensions', label: 'Extensions', description: 'Memory, regex scripts, images, audio and writing', sections: [{ id: 'ext', title: 'Built-in extensions', body: extBody }, { id: 'regex', title: 'Regex scripts', body: regexBody }] },
     { id: 'appearance', label: 'Appearance & Interface', description: 'Themes, typography and chat display', sections: [{ id: 'appearance', title: 'Appearance', body: apBody }, { id: 'ui', title: 'Interface', body: uiBody }] },
     { id: 'data', label: 'Data & Backup', description: 'Import, export, sync and storage', sections: [{ id: 'data', title: 'Data & backup', body: dataBody }] }
   ];
   const selected = categories.find(c => c.id === route().a);
-  const sectionHtml = (section) => sec(section.id, section.title, section.body);
+  const sectionHtml = (section) => selected?.id === 'roleplay' && section.id === 'characters' ? `<details class="section" data-sec="characters" open><summary>Characters</summary><div class="sec-body">${section.body}</div></details>` : sec(section.id, section.title, section.body);
   const categoryLinks = categories.map(c => `<button class="settings-category-link ${selected?.id === c.id ? 'selected' : ''}" data-action="go" data-to="#/settings/${c.id}">
     <span class="settings-category-label">${c.label}</span><span class="settings-category-description">${c.description}</span>
     <span class="settings-category-chevron" aria-hidden="true">›</span></button>`).join('');
-  const charactersLink = selected?.id === 'roleplay' ? `<div class="settings-character-panel"><h3>Characters &amp; Groups</h3>
-    <p class="hint">Manage your character library, groups and conversations.</p>
-    <button class="btn" data-action="go" data-to="#/">Open character library</button>
-    <button class="btn" data-action="import-files">Import characters</button></div>` : '';
-  const categoryContent = selected ? `${charactersLink}${selected.sections.map(sectionHtml).join('')}` : '';
+  const categoryContent = selected ? selected.sections.map(sectionHtml).join('') : '';
   app.innerHTML = `
     <header class="bar">
       <button class="icon-btn" data-action="settings-back" aria-label="Back">${ICONS.back}</button>
