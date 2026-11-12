@@ -1470,8 +1470,9 @@ async function render() {
     else if (r.name === 'qr' && r.a) renderQrView(r.a);
     else if (r.name === 'search') await renderSearchView(r.a);
     else if (r.name === 'lorebook' && r.a) renderLorebookView(r.a);
+    else if (r.name === 'library') await renderHome();
     else if (r.name === 'settings') { S.settingsChats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); renderSettingsView(r.a); }
-    else await renderHome();
+    else await renderLanding();
   } catch (e) {
     console.error(e);
     toast(e.message || String(e), 5000);
@@ -1480,7 +1481,40 @@ async function render() {
 }
 window.addEventListener('hashchange', render);
 
-// ---------- HOME ----------
+// ---------- LANDING ----------
+// This page reads existing records only; no chat or persona data is rewritten.
+async function renderLanding() {
+  const chats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const recent = chats[0];
+  const chars = await db.getAll('characters');
+  const character = recent && chars.find(c => c.id === recent.charId);
+  const group = recent && S.groups.find(g => g.id === recent.charId);
+  const avatar = character ? avatarHtml(character.avatar, character.name, 'av lg') : group ? groupAvatarHtml(group.members.map(id => chars.find(c => c.id === id)).filter(Boolean), 'lg') : '';
+  const last = recent?.messages?.slice().reverse().find(m => !m.is_system && !m.isSystem && (m.mes || m.text || m.content));
+  const preview = String(last?.mes || last?.text || last?.content || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 150);
+  app.innerHTML = `
+    <header class="bar"><h1 class="title">${BUILD_NAME}</h1><div class="spacer"></div>
+      <button class="icon-btn" data-action="go" data-to="#/settings" aria-label="Application settings" title="Application settings">${ICONS.gear}</button>
+    </header>
+    <main class="scroll pad pt-landing">
+      <h2 class="pt-landing-heading">Pick up where you left off</h2>
+      ${recent ? `<div class="pt-recent">
+        <div class="row">${avatar}<div class="grow"><strong>${esc(recent.title || character?.name || group?.name || 'Recent chat')}</strong>
+          <div class="muted small">${esc(character?.name || group?.name || '')} ${timeAgo(recent.updatedAt)}</div>
+          <div class="muted pt-preview">${esc(preview || 'Continue your story…')}</div></div></div>
+        <button class="btn primary block" data-action="go" data-to="#/chat/${esc(recent.charId)}/${esc(recent.id)}">Continue chat →</button>
+      </div>` : '<div class="pt-recent"><p class="muted">Your most recent conversation will appear here once you start chatting.</p></div>'}
+      <hr class="pt-landing-divider">
+      <div class="pt-home-grid">
+        <button class="pt-home-tile" data-action="settings-chat-library">${ICONS.chatGear}<span>Open Chat Library</span></button>
+        <button class="pt-home-tile" data-action="go" data-to="#/library">${ICONS.plus}<span>Create New Chat</span></button>
+        <button class="pt-home-tile" data-action="go" data-to="#/edit/new">${ICONS.plus}<span>Create Character</span></button>
+        <button class="pt-home-tile" data-action="home-create-persona">${ICONS.plus}<span>Create Persona</span></button>
+      </div>
+    </main>`;
+}
+
+// ---------- HOME / CHARACTER LIBRARY ----------
 const lib = () => S.settings.library || (S.settings.library = { sort: 'recent', favFirst: true, folders: [] });
 const SORTS = { recent: 'Recent chats', name: 'Name A–Z', added: 'Newest added' };
 
@@ -1516,7 +1550,8 @@ async function renderHome() {
   const showFolders = !tagOn && !q && !S.libFav && folders.length;
   app.innerHTML = `
     <header class="bar">
-      <h1 class="title">${BUILD_NAME}</h1>
+      <button class="icon-btn" data-action="go" data-to="#/" aria-label="Back to home">${ICONS.back}</button>
+      <h1 class="title">Characters</h1>
       <div class="spacer"></div>
       <button class="icon-btn" data-action="generation-menu" aria-label="Generation controls" title="Generation controls">${ICONS.sliders}</button>
       <button class="icon-btn" data-action="home-chat-menu" aria-label="Chats and characters" title="Chats and characters">${ICONS.chatGear}</button>
@@ -3769,6 +3804,8 @@ function renderSettingsView(open) {
     <header class="bar">
       <button class="icon-btn" data-action="settings-back" aria-label="Back">${ICONS.back}</button>
       <h1 class="title">Settings${selected ? ' · ' + selected.label : ''}</h1>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-action="go" data-to="#/" aria-label="Home" title="Home">${ICONS.home}</button>
     </header>
     <main class="scroll pad settings-layout">
       <nav class="settings-sidebar" aria-label="Settings categories">
@@ -5131,6 +5168,13 @@ const actions = {
     const c = S.settingsChats?.[0];
     if (c) go(`#/chat/${c.charId}/${c.id}`);
   },
+  'home-create-persona': () => {
+    const p = { id: db.uid(), name: 'New persona', description: '', avatar: null };
+    S.settings.personas.push(p);
+    S.settings.activePersona = p.id;
+    saveSettings();
+    go('#/settings/persona');
+  },
   'settings-chat-library': async () => {
     const chats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     openSheet(`<div class="sheet-title">Chat Library</div>
@@ -5485,6 +5529,7 @@ document.addEventListener('keydown', (e) => {
 const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
 const ICONS = {
   back: svg('<path d="M15 18l-6-6 6-6"/>'),
+  home: svg('<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   import: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/>'),
