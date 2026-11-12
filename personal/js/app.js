@@ -5104,6 +5104,28 @@ const actions = {
   },
   'backup-export': exportBackup,
   'open-persona-library': () => document.getElementById('persona-library-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+  'settings-recent-chat': () => {
+    const c = S.settingsChats?.[0];
+    if (c) go(`#/chat/${c.charId}/${c.id}`);
+  },
+  'settings-chat-library': async () => {
+    const chats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    openSheet(`<div class="sheet-title">Chat Library</div>
+      <div class="chat-list">${chats.length ? chats.map((c) => `<button class="btn block" data-action="settings-open-chat" data-id="${esc(c.id)}" data-char-id="${esc(c.charId)}">${esc(c.title || 'Untitled chat')}</button>`).join('') : '<p class="hint">No chats yet.</p>'}</div>`, 'tall');
+  },
+  'settings-open-chat': (el) => go(`#/chat/${el.dataset.charId}/${el.dataset.id}`),
+  'settings-import-chat': async () => {
+    const chars = await db.getAll('characters');
+    if (!chars.length) return toast('Import a character before importing a chat.', 5000);
+    openSheet(`<div class="sheet-title">Import chat</div><p class="hint">Choose which character this chat belongs to.</p>
+      <div class="chat-list">${chars.map((c) => `<button class="btn block" data-action="settings-import-chat-for" data-id="${esc(c.id)}">${esc(c.name)}</button>`).join('')}</div>`, 'tall');
+  },
+  'settings-import-chat-for': async (el) => {
+    const char = await db.get('characters', el.dataset.id);
+    if (!char) return toast('Character not found.', 5000);
+    S.char = char;
+    await importChat();
+  },
   'persona-import': importPersonas,
   'persona-export': exportPersona,
   'secret-clear': (el) => {
