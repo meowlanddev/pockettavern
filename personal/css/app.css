@@ -614,3 +614,23 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .avatar-frame-preview { width: 184px; height: 184px; border-radius: 50%; overflow: hidden; margin: 12px auto 20px; background: var(--bg3); }
 .avatar-frame-preview img { display: block; width: 100%; height: 100%; object-fit: cover; touch-action: none; cursor: grab; user-select: none; }
 .avatar-frame-preview img:active { cursor: grabbing; }
+
+/* Persona settings: divider, top-aligned editor and full-width mobile picker. */
+.persona-divider { border: 0; border-top: 1px solid var(--line); margin: 16px 0 14px; }
+.persona-active-title { font-weight: 650; font-size: 1.05rem; margin-bottom: 6px; }
+.persona-editor-row { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.persona-avatar-column { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 0 0 128px; }
+.persona-editor-fields { min-width: 0; flex: 1 1 190px; align-self: flex-start; }
+.persona-editor-fields > .field:first-child { margin-top: 0; }
+.persona-lorebooks { width: 100%; min-width: 0; }
+.persona-lorebook-picker { width: 100%; min-width: 0; box-sizing: border-box; }
+.persona-lorebook-picker > summary { width: 100%; box-sizing: border-box; }
+.persona-lorebook-picker > .sec-body { max-height: 220px; overflow-y: auto; width: 100%; box-sizing: border-box; }
+.persona-lorebook-picker .check { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; box-sizing: border-box; }
+.persona-lorebook-picker .check span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .persona-editor-row { flex-wrap: nowrap; gap: 12px; }
+  .persona-avatar-column { flex-basis: 128px; }
+  .persona-editor-fields { flex: 1 1 0; min-width: 0; }
+  .persona-lorebook-picker { width: 100%; }
+}
