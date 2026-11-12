@@ -3433,7 +3433,7 @@ function renderSettingsView(open) {
   const conn = activeConn();
   const persona = activePersona();
   const p = S.settings.preset;
-  const sec = (id, title, body) => `<details class="section" data-sec="${id}" ${open === id ? 'open' : ''}><summary>${title}</summary><div class="sec-body">${body}</div></details>`;
+  const sec = (id, title, body) => `<details class="section" data-sec="${id}" ${open === id || route().b === id ? 'open' : ''}><summary>${title}</summary><div class="sec-body">${body}</div></details>`;
   const connBody = `
     ${S.settings.connections.length ? `<div class="field"><span class="label">Profile</span>
       <div class="row"><select class="grow" data-change="select-conn">
@@ -5173,7 +5173,7 @@ const actions = {
     S.settings.personas.push(p);
     S.settings.activePersona = p.id;
     saveSettings();
-    go('#/settings/roleplay');
+    go('#/settings/roleplay/persona');
   },
   'settings-chat-library': async () => {
     const chats = (await db.getAll('chats')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
