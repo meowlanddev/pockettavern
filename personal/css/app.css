@@ -634,3 +634,6 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
   .persona-editor-fields { flex: 1 1 0; min-width: 0; }
   .persona-lorebook-picker { width: 100%; }
 }
+
+/* Active Persona section heading above its selector. */
+.persona-active-heading { margin: 0 0 8px; font-size: 1.1rem; font-weight: 650; }
