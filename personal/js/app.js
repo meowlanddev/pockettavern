@@ -3541,14 +3541,25 @@ function renderSettingsView(open) {
     ${settingsField('Recursive lorebook scan', 'prompt.wi_recursion', 'checkbox', '', 'Entries can trigger other entries')}
     ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}`;
 
-  // Persona management will get its own library UI in a subsequent pass.
-  // Keep existing persona data and actions intact; only simplify the entry screen.
   const personaBody = `
-    <p class="hint">Manage the personas you use in roleplay.</p>
+    <label class="field"><span class="label">Active persona</span>
+      <select data-change="select-persona">
+        ${S.settings.personas.map((x) => `<option value="${x.id}" ${x.id === persona.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+        <option value="__new">+ New persona…</option>
+      </select></label>
+    <div class="row"><button class="avatar-pick" data-action="persona-avatar">${avatarHtml(persona.avatar, persona.name, 'av lg')}</button>
+      ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
+      <div class="grow">${settingsField('Your name', 'persona.name', 'text')}</div></div>
+    ${settingsField('Description', 'persona.description', 'textarea', '', 'Who you are in the story. Sent to the AI.')}
+    <div class="field"><span class="label">Lorebooks for this persona</span>
+      ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
+    </div>
     <div class="row wrap">
-      <button class="btn" disabled title="Persona library is coming in the next pass">Persona library</button>
-      <button class="btn" disabled title="Persona import will be connected in the next pass">${ICONS.import} Import persona</button>
-    </div>`;
+      <button class="btn sm" data-action="persona-import">${ICONS.import} Import persona</button>
+      <button class="btn sm" data-action="persona-export">${ICONS.download} Export persona</button>
+      ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}
+    </div>
+    <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself. Export saves this persona as a card others can import.</p>`;
 
   const en = S.settings.ext.enhance;
   const mm = S.settings.ext.memory;
