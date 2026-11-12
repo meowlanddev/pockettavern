@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.6)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.7)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3555,10 +3555,10 @@ function renderSettingsView(open) {
       </select></label>
     <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex:0 0 120px">
-        <button class="avatar-pick" data-action="persona-avatar" aria-label="Choose persona avatar">${avatarHtml(persona.avatar, persona.name, 'av xl')}</button>
+        <button class="avatar-pick" data-action="persona-avatar" aria-label="Choose persona avatar" style="align-self:flex-start">${avatarHtml(persona.avatar, persona.name, 'av xl')}</button>
         ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
       </div>
-      <div class="grow" style="min-width:190px">
+      <div class="grow" style="min-width:190px;align-self:flex-start">
         ${settingsField('Name', 'persona.name', 'text')}
         <div class="field"><span class="label">Attached Lorebooks</span>
           <details class="section"><summary>Choose lorebooks</summary>
