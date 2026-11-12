@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.11)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.12)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -5103,7 +5103,28 @@ const actions = {
     rerenderSettings();
   },
   'backup-export': exportBackup,
-  'open-persona-library': () => document.getElementById('persona-library-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+  'open-persona-library': () => {
+    const personas = S.settings.personas || [];
+    openSheet(`<div class="sheet-title">Persona Library</div>
+      <div class="char-list persona-library-list">
+        ${personas.map((p) => {
+          const preview = String((p.details || '').trim() || (p.description || '').trim()).replace(/\\s+/g, ' ').slice(0, 140);
+          return `<button class="char-item persona-library-item ${p.id === S.settings.activePersona ? 'current' : ''}" data-action="persona-library-select" data-id="${esc(p.id)}">
+            ${avatarHtml(p.avatar, p.name, 'av lg')}
+            <span class="ci-text"><span class="ci-name">${esc(p.name || 'Unnamed persona')}${p.id === S.settings.activePersona ? ' <span class="badge">Active</span>' : ''}</span>
+            <span class="ci-desc">${esc(preview)}</span></span>
+          </button>`;
+        }).join('')}
+      </div>`, 'tall');
+  },
+  'persona-library-select': (el) => {
+    if (!S.settings.personas.some((p) => p.id === el.dataset.id)) return;
+    S.settings.activePersona = el.dataset.id;
+    saveSettings();
+    closeSheet();
+    rerenderSettings();
+    document.getElementById('persona-library-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  },
   'settings-recent-chat': () => {
     const c = S.settingsChats?.[0];
     if (c) go(`#/chat/${c.charId}/${c.id}`);
