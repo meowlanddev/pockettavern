@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.4)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.5)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3553,13 +3553,23 @@ function renderSettingsView(open) {
         ${S.settings.personas.map((x) => `<option value="${x.id}" ${x.id === persona.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
         <option value="__new">+ New persona…</option>
       </select></label>
-    <div class="row"><button class="avatar-pick" data-action="persona-avatar">${avatarHtml(persona.avatar, persona.name, 'av lg')}</button>
-      ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
-      <div class="grow">${settingsField('Your name', 'persona.name', 'text')}</div></div>
-    ${settingsField('Description', 'persona.description', 'textarea', '', 'Who you are in the story. Sent to the AI.')}
-    <div class="field"><span class="label">Lorebooks for this persona</span>
-      ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
+    <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex:0 0 120px">
+        <button class="avatar-pick" data-action="persona-avatar" style="width:112px;height:112px" aria-label="Choose persona avatar">${avatarHtml(persona.avatar, persona.name, 'av lg')}</button>
+        ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
+      </div>
+      <div class="grow" style="min-width:190px">
+        ${settingsField('Name', 'persona.name', 'text')}
+        <div class="field"><span class="label">Attached Lorebooks</span>
+          <details class="section"><summary>Choose lorebooks</summary>
+            <div class="sec-body" style="max-height:220px;overflow-y:auto">
+              ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
+            </div>
+          </details>
+        </div>
+      </div>
     </div>
+    ${settingsField('Description', 'persona.description', 'textarea', '', 'Who you are in the story. Sent to the AI.')}
     <div class="row wrap">
       <button class="btn sm" data-action="persona-export">${ICONS.download} Export persona</button>
       ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}
