@@ -661,3 +661,11 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .pt-home-tile svg { width: 27px; height: 27px; }
 .pt-home-tile:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 @media(max-width: 350px) { .pt-home-grid { gap: .5rem; } .pt-home-tile { padding: .5rem; font-size: .9rem; } }
+
+/* Dismissible PWA install suggestion */
+.pt-install-banner { display: flex; align-items: center; gap: .5rem; border-radius: 12px; margin: .5rem 0 1rem; border: 1px solid var(--border, rgba(150,150,160,.25)); background: var(--surface, rgba(120,120,140,.09)); }
+.pt-install-message { flex: 1; min-width: 0; padding: .8rem .2rem .8rem .9rem; color: inherit; font: inherit; text-align: left; line-height: 1.4; }
+button.pt-install-message { border: 0; background: transparent; cursor: pointer; }
+.pt-install-dismiss { flex: none; align-self: stretch; min-width: 42px; border: 0; background: transparent; color: inherit; opacity: .75; font: inherit; font-size: 1.5rem; cursor: pointer; }
+.pt-install-dismiss:hover { opacity: 1; }
+.pt-install-dismiss:focus-visible, .pt-install-message:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; }
