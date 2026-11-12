@@ -644,3 +644,6 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 6px; }
 .persona-library-item.current { border-color: var(--accent); }
 .persona-library-item .ci-text { min-width: 0; flex: 1; }
 .persona-library-item .ci-name, .persona-library-item .ci-desc { display: block; }
+
+/* Visible dropdown cue beside the Active Persona heading. */
+.persona-active-heading::after { content: '⌄'; display: inline-block; margin-left: 8px; color: var(--muted); font-size: 1.15em; line-height: 0.8; vertical-align: 1px; }
