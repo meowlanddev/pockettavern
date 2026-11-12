@@ -79,6 +79,8 @@ svg { display: block; flex-shrink: 0; }
 .av.md { width: 48px; height: 48px; }
 .av.lg { width: 56px; height: 56px; border-radius: 16px; }
 .av.xl { width: 128px; height: 160px; border-radius: 20px; }
+/* Persona editor: keep the large avatar square without changing other XL avatars. */
+.avatar-pick .av.xl { width: 128px; height: 128px; object-fit: cover; }
 .av-fallback {
   display: inline-flex; align-items: center; justify-content: center;
   font-weight: 700; color: #fff;
