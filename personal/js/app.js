@@ -3744,7 +3744,6 @@ function renderSettingsView(open) {
     <header class="bar">
       <button class="icon-btn" data-action="settings-back" aria-label="Back">${ICONS.back}</button>
       <h1 class="title">Settings${selected ? ' · ' + selected.label : ''}</h1>
-      <button class="btn sm" data-action="return-to-chat">Chat</button>
     </header>
     <main class="scroll pad settings-layout">
       <nav class="settings-sidebar" aria-label="Settings categories">
@@ -4835,7 +4834,6 @@ const actions = {
     go(`#/chat/${S.char.id}/${chat.id}`);
   },
   'chat-menu': chatMenu,
-  'return-to-chat': () => go(settingsReturn?.hash || lastChatRoute || '#/'),
   'settings-back': () => { if (route().a) go('#/settings'); else go(settingsReturn?.hash || lastChatRoute || '#/'); },
   'generation-menu': generationMenu,
   'home-chat-menu': homeChatMenu,
