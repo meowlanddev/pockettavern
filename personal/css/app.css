@@ -669,3 +669,9 @@ button.pt-install-message { border: 0; background: transparent; cursor: pointer;
 .pt-install-dismiss { flex: none; align-self: stretch; min-width: 42px; border: 0; background: transparent; color: inherit; opacity: .75; font: inherit; font-size: 1.5rem; cursor: pointer; }
 .pt-install-dismiss:hover { opacity: 1; }
 .pt-install-dismiss:focus-visible, .pt-install-message:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; }
+
+/* Character search on the landing screen */
+.pt-landing > .search { width: 100%; margin: .7rem 0 1rem; }
+.pt-home-results { display: flex; flex-direction: column; gap: .35rem; margin: -.35rem 0 1.1rem; }
+.pt-home-result { display: block; width: 100%; padding: .7rem .9rem; border: 1px solid var(--border, rgba(150,150,160,.25)); border-radius: 10px; background: var(--surface, rgba(120,120,140,.07)); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pt-home-result:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
