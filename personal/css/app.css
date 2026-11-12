@@ -234,6 +234,9 @@ h4.sub { margin: 20px 0 4px; font-size: .85rem; color: var(--accent); text-trans
 .section summary::after { content: '›'; color: var(--muted); transition: transform .2s; font-size: 1.3rem; line-height: 1; }
 .section[open] summary::after { transform: rotate(90deg); }
 .sec-body { padding: 0 16px 14px; }
+/* Tighten the space between expanded Settings headings and their first blurb/control. */
+.settings-content .section[open] > summary { padding-bottom: 6px; }
+.settings-content .section[open] > .sec-body > :first-child { margin-top: 0; }
 .section .field input, .section .field textarea, .section .field select, .section .row input { background: var(--bg); }
 
 .form .avatar-edit { display: flex; justify-content: center; margin: 4px 0 8px; }
