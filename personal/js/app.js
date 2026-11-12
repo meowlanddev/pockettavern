@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.1)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.2)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -1428,8 +1428,9 @@ function route() {
 }
 let goAfterPop = null; // a screen to open once the sheet's history entry is gone
 let settingsReturn = null;
+let lastChatRoute = null; // Navigation only; never modifies stored chats.
 const go = (hash) => {
-  if (hash === '#/settings' && route().name === 'chat') {
+  if (hash.startsWith('#/settings') && route().name === 'chat') {
     settingsReturn = { hash: location.hash, draft: document.querySelector('#send_textarea')?.value || '', scroll: document.querySelector('#chat')?.scrollTop || 0 };
   }
   // A sheet was just closed and its history entry is still being removed: open
@@ -1444,7 +1445,8 @@ const go = (hash) => {
 
 async function render() {
   const r = route();
-  closeSheet();
+  // Route changes must not trigger another history.back(): doing so traps Android Back.
+  closeSheet({ fromPop: true });
   S.openActions = null;
   S.editing = null;
   document.documentElement.style.setProperty('--font', `${S.settings.ui.fontSize || 16}px`);
@@ -1452,6 +1454,7 @@ async function render() {
   if (r.name !== 'group') S.groupDraft = null;
   try {
     if (r.name === 'chat' && r.a) {
+      lastChatRoute = location.hash;
       await renderChatView(r.a, r.b);
       if (settingsReturn && location.hash === settingsReturn.hash) {
         const draft = document.querySelector('#send_textarea');
@@ -3741,6 +3744,7 @@ function renderSettingsView(open) {
     <header class="bar">
       <button class="icon-btn" data-action="settings-back" aria-label="Back">${ICONS.back}</button>
       <h1 class="title">Settings${selected ? ' · ' + selected.label : ''}</h1>
+      <button class="btn sm" data-action="return-to-chat">Chat</button>
     </header>
     <main class="scroll pad settings-layout">
       <nav class="settings-sidebar" aria-label="Settings categories">
@@ -4387,7 +4391,7 @@ const actions = {
     }
   },
   go: (el) => go(el.dataset.to),
-  'go-back': () => { if (route().name === 'settings' && settingsReturn) go(settingsReturn.hash); else if (history.length > 1) history.back(); else go('#/'); },
+  'go-back': () => { if (route().name === 'settings') return go(route().a ? '#/settings' : (settingsReturn?.hash || lastChatRoute || '#/')); if (route().name === 'search' && route().a && S.chat) return go(lastChatRoute || '#/'); go('#/'); },
   'install-app': async () => {
     const p = installPrompt;
     if (!p) return;
@@ -4831,7 +4835,8 @@ const actions = {
     go(`#/chat/${S.char.id}/${chat.id}`);
   },
   'chat-menu': chatMenu,
-  'settings-back': () => { if (route().a) go('#/settings'); else if (settingsReturn) go(settingsReturn.hash); else if (history.length > 1) history.back(); else go('#/'); },
+  'return-to-chat': () => go(settingsReturn?.hash || lastChatRoute || '#/'),
+  'settings-back': () => { if (route().a) go('#/settings'); else go(settingsReturn?.hash || lastChatRoute || '#/'); },
   'generation-menu': generationMenu,
   'home-chat-menu': homeChatMenu,
   'memory-tools': memoryToolsSheet,
