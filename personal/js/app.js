@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.16)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.17)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3607,6 +3607,8 @@ function renderSettingsView(open) {
     </div></details>
     <div class="field"><span class="label">Background image</span>
       <div class="row wrap"><button class="btn sm" data-action="ap-bg">${ap.bgImage ? 'Change' : 'Choose'} image</button>${ap.bgImage ? '<button class="btn sm danger" data-action="ap-bg-remove">Remove</button>' : ''}</div></div>
+    `;
+  const themesBody = `
     ${ap.bgImage ? `<label class="field inline"><span class="label">Darken<span class="hint">0–1</span></span><input inputmode="decimal" data-ap-num="bgDim" value="${ap.bgDim}"></label>
       <label class="field inline"><span class="label">Blur<span class="hint">px</span></span><input inputmode="numeric" data-ap-num="bgBlur" value="${ap.bgBlur}"></label>` : ''}
     <details class="section"><summary>Custom CSS</summary><div class="sec-body">
@@ -3618,8 +3620,7 @@ function renderSettingsView(open) {
       <button class="btn" data-action="import-files">${ICONS.import} Import theme</button>
       ${(ap.saved || []).some((t) => t.id === ap.theme) ? `<button class="btn danger" data-action="ap-delete">${ICONS.trash} Delete theme</button>` : ''}
     </div>
-    <p class="hint">Imports SillyTavern UI themes and Moonlit Echoes presets (e.g. “[Moonlit] Glimmer”). Exports load in SillyTavern too. Chat styles also switch with /echostyle, /whisperstyle… or /chatstyle name.</p>`;
-  const sm = S.settings.ext.summarize;
+    <p class="hint">Imports SillyTavern UI themes and Moonlit Echoes presets (e.g. “[Moonlit] Glimmer”). Exports load in SillyTavern too. Chat styles also switch with /echostyle, /whisperstyle… or /chatstyle name.</p>`;  const sm = S.settings.ext.summarize;
   const nd = S.settings.ext.database;
   const tog = (attr, key, on, label, hint = '') => `<label class="toggle"><span><span class="label">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</span><input type="checkbox" ${attr}="${key}" ${on ? 'checked' : ''}><i></i></label>`;
   const extra = extSections();
@@ -3756,7 +3757,7 @@ function renderSettingsView(open) {
     { id: 'ai', label: 'Connection & AI', description: 'Connection, models, generation, presets, prompts and formatting', sections: [{ id: 'connection', title: 'API connection', body: connBody }, { id: 'preset', title: 'Preset (prompt manager)', body: presetBody }, { id: 'generation', title: 'Generation', body: genBody }, { id: 'formatting', title: 'Formatting (text completion)', body: fmtBody }, { id: 'prompt', title: 'Prompts (Simple preset)', body: promptBody }] },
     { id: 'roleplay', label: 'Roleplay & Content', description: 'Chats, characters, personas, lorebooks and quick replies', sections: [{ id: 'chats', title: 'Chats', body: chatsBody }, { id: 'characters', title: 'Characters', body: charactersBody }, { id: 'persona', title: 'Personas', body: personaBody }, { id: 'lorebooks', title: 'Lorebooks', body: lorebookBody }, { id: 'qr', title: 'Quick replies', body: qrBody }] },
     { id: 'extensions', label: 'Extensions', description: 'Memory, regex scripts, images, audio and writing', sections: [{ id: 'ext', title: 'Built-in extensions', body: extBody }, { id: 'regex', title: 'Regex scripts', body: regexBody }] },
-    { id: 'appearance', label: 'Appearance & Interface', description: 'Themes, typography and chat display', sections: [{ id: 'appearance', title: 'Appearance', body: apBody }, { id: 'ui', title: 'Interface', body: uiBody }] },
+    { id: 'appearance', label: 'Appearance & Interface', description: 'Themes, typography and chat display', sections: [{ id: 'appearance', title: 'Appearance', body: apBody }, { id: 'themes', title: 'Themes', body: themesBody }, { id: 'ui', title: 'Interface', body: uiBody }] },
     { id: 'data', label: 'Data & Backup', description: 'Import, export, sync and storage', sections: [{ id: 'data', title: 'Data & backup', body: dataBody }] }
   ];
   const selected = categories.find(c => c.id === route().a);
