@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.5)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.6)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3542,11 +3542,11 @@ function renderSettingsView(open) {
     ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}`;
 
   const personaBody = `
+    <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself.</p>
     <div class="row wrap">
       <button class="btn" data-action="open-persona-library">Open persona library</button>
       <button class="btn" data-action="persona-import">${ICONS.import} Import persona</button>
     </div>
-    <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself.</p>
     <h3 id="persona-library-heading">Persona Library</h3>
     <label class="field"><span class="label">Active persona</span>
       <select data-change="select-persona">
