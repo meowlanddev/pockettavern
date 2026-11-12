@@ -3555,7 +3555,7 @@ function renderSettingsView(open) {
       </select></label>
     <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex:0 0 120px">
-        <button class="avatar-pick" data-action="persona-avatar" style="width:112px;height:112px" aria-label="Choose persona avatar">${avatarHtml(persona.avatar, persona.name, 'av lg')}</button>
+        <button class="avatar-pick" data-action="persona-avatar" aria-label="Choose persona avatar">${avatarHtml(persona.avatar, persona.name, 'av xl')}</button>
         ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
       </div>
       <div class="grow" style="min-width:190px">
