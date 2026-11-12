@@ -3542,6 +3542,10 @@ function renderSettingsView(open) {
     ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}`;
 
   const personaBody = `
+    <h3>Add</h3>
+    <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself.</p>
+    <div class="row wrap"><button class="btn sm" data-action="persona-import">${ICONS.import} Import persona</button></div>
+    <h3>Persona Library</h3>
     <label class="field"><span class="label">Active persona</span>
       <select data-change="select-persona">
         ${S.settings.personas.map((x) => `<option value="${x.id}" ${x.id === persona.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
@@ -3555,11 +3559,10 @@ function renderSettingsView(open) {
       ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
     </div>
     <div class="row wrap">
-      <button class="btn sm" data-action="persona-import">${ICONS.import} Import persona</button>
       <button class="btn sm" data-action="persona-export">${ICONS.download} Export persona</button>
       ${S.settings.personas.length > 1 ? '<button class="btn sm danger" data-action="delete-persona">Delete persona</button>' : ''}
     </div>
-    <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself. Export saves this persona as a card others can import.</p>`;
+    <p class="hint">Export saves this persona as a card others can import.</p>`;
 
   const en = S.settings.ext.enhance;
   const mm = S.settings.ext.memory;
