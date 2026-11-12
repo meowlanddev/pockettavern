@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.8)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.9)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3547,23 +3547,22 @@ function renderSettingsView(open) {
       <button class="btn" data-action="open-persona-library">Open persona library</button>
       <button class="btn" data-action="persona-import">${ICONS.import} Import persona</button>
     </div>
-    <h3 id="persona-library-heading">Persona Library</h3>
-    <label class="field"><span class="label">Active persona</span>
-      <select data-change="select-persona">
+    <hr class="persona-divider">
+    <label class="field" id="persona-library-heading"><span class="label persona-active-title">Active Persona</span>
+      <select data-change="select-persona" aria-label="Active Persona">
         ${S.settings.personas.map((x) => `<option value="${x.id}" ${x.id === persona.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
-        <option value="__new">+ New persona…</option>
       </select></label>
-    <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
-      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex:0 0 120px">
+    <div class="row persona-editor-row">
+      <div class="persona-avatar-column">
         <button class="avatar-pick" data-action="persona-avatar" aria-label="Choose persona avatar" style="align-self:flex-start">${avatarHtml(persona.avatar, persona.name, 'av xl')}</button>
         ${persona.avatar ? '<button class="btn sm" data-action="persona-frame">Adjust avatar</button>' : ''}
       </div>
-      <div class="grow" style="min-width:190px;align-self:flex-start">
+      <div class="grow persona-editor-fields">
         ${settingsField('Name', 'persona.name', 'text')}
-        <div class="field"><span class="label">Attached Lorebooks</span>
-          <details class="section"><summary>Choose lorebooks</summary>
-            <div class="sec-body" style="max-height:220px;overflow-y:auto">
-              ${S.lorebooks.map((b) => `<label class="check"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('') || '<span class="hint">No lorebooks imported yet.</span>'}
+        <div class="field persona-lorebooks"><span class="label">Attached Lorebooks</span>
+          <details class="section persona-lorebook-picker"><summary>Choose Lorebooks</summary>
+            <div class="sec-body">
+              ${S.lorebooks.map((b) => `<label class="check" title="${esc(b.name)}"><input type="checkbox" data-persona-book="${b.id}" ${(persona.lorebooks || []).includes(b.id) ? 'checked' : ''}><span title="${esc(b.name)}">${esc(Array.from(b.name).length > 70 ? Array.from(b.name).slice(0, 70).join('') + '[...]' : b.name)}</span></label>`).join('') || '<span class="hint">No Lorebooks imported yet.</span>'}
             </div>
           </details>
         </div>
