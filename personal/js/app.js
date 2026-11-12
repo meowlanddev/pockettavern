@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.3)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.4)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3542,10 +3542,12 @@ function renderSettingsView(open) {
     ${settingsField('Max recursion steps', 'prompt.wi_max_recursion', 'number', '', '0 = unlimited')}`;
 
   const personaBody = `
-    <h3>Add</h3>
+    <div class="row wrap">
+      <button class="btn" data-action="open-persona-library">Open persona library</button>
+      <button class="btn" data-action="persona-import">${ICONS.import} Import persona</button>
+    </div>
     <p class="hint">Import a persona file, a SillyTavern persona backup (.json), or any character card (.png/.json) to use as yourself.</p>
-    <div class="row wrap"><button class="btn sm" data-action="persona-import">${ICONS.import} Import persona</button></div>
-    <h3>Persona Library</h3>
+    <h3 id="persona-library-heading">Persona Library</h3>
     <label class="field"><span class="label">Active persona</span>
       <select data-change="select-persona">
         ${S.settings.personas.map((x) => `<option value="${x.id}" ${x.id === persona.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
@@ -3728,7 +3730,7 @@ function renderSettingsView(open) {
 
   const charactersBody = `<p class="hint">Manage your character library, groups and conversations.</p>
     <div class="row wrap"><button class="btn" data-action="go" data-to="#/">Open character library</button>
-    <button class="btn" data-action="import-files">Import characters</button></div>`;
+    <button class="btn" data-action="import-files">${ICONS.import} Import characters</button></div>`;
 
   const categories = [
     { id: 'ai', label: 'Connection & AI', description: 'Connection, models, generation, presets, prompts and formatting', sections: [{ id: 'connection', title: 'API connection', body: connBody }, { id: 'preset', title: 'Preset (prompt manager)', body: presetBody }, { id: 'generation', title: 'Generation', body: genBody }, { id: 'formatting', title: 'Formatting (text completion)', body: fmtBody }, { id: 'prompt', title: 'Prompts (Simple preset)', body: promptBody }] },
@@ -5083,6 +5085,7 @@ const actions = {
     rerenderSettings();
   },
   'backup-export': exportBackup,
+  'open-persona-library': () => document.getElementById('persona-library-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
   'persona-import': importPersonas,
   'persona-export': exportPersona,
   'secret-clear': (el) => {
