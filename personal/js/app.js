@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.13)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.14)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3498,6 +3498,11 @@ function renderSettingsView(open) {
     <button class="btn" data-action="import-files">${ICONS.import} Import SillyTavern preset</button>`;
 
   const lorebookBody = `
+    <p class="hint">Lorebooks add world information and context to your chats. Global lorebooks apply to every chat; you can also attach lorebooks to personas or characters.</p>
+    <div class="row wrap">
+      <button class="btn" data-action="lb-new">${ICONS.plus} New Lorebook</button>
+      <button class="btn" data-action="import-files">${ICONS.import} Import Lorebook</button>
+    </div>
     ${S.lorebooks.map((b) => {
       const where = [b.global ? 'global' : '', S.settings.personas.filter((x) => (x.lorebooks || []).includes(b.id)).map((x) => 'persona: ' + x.name).join(', ')].filter(Boolean).join(' · ');
       return `<div class="list-row">
@@ -3508,12 +3513,7 @@ function renderSettingsView(open) {
         <span class="hint">Global</span>
         <label class="toggle mini"><input type="checkbox" data-lb-global="${b.id}" ${b.global ? 'checked' : ''}><i></i></label>
       </div>`;
-    }).join('') || '<p class="muted">No lorebooks yet.</p>'}
-    <p class="hint">Global lorebooks apply to every chat. You can also attach a lorebook to a persona (Persona section) or to a character (Edit character). Cards with embedded lorebooks work automatically.</p>
-    <div class="row wrap">
-      <button class="btn" data-action="import-files">${ICONS.import} Import</button>
-      <button class="btn" data-action="lb-new">${ICONS.plus} New lorebook</button>
-    </div>`;
+    }).join('') || '<p class="muted">No lorebooks yet.</p>'}`;
 
   const regexBody = `
     ${S.regex.map((r, i) => `<div class="list-row">
