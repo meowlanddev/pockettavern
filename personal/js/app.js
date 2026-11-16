@@ -3483,6 +3483,7 @@ function renderSettingsView(open) {
         <button class="btn" data-action="browse-models">Browse</button></div></div>
       <div class="row wrap">
         <button class="btn primary" data-action="test-conn">Test connection</button>
+        <button class="btn" data-action="duplicate-conn">${ICONS.copy} Duplicate profile</button>
         <button class="btn danger" data-action="delete-conn">Delete profile</button>
       </div>
       <p class="hint">Keys are stored only on this device and sent only to the provider you choose.</p>` : '<p class="muted">Add a connection to start chatting.</p>'}`;
@@ -5141,6 +5142,22 @@ const actions = {
   },
   'test-conn': testConnection,
   'conn-new': () => { newConnection(); saveSettings(); rerenderSettings(); toast('Connection added — choose a provider and paste your key.', 3500); },
+  'duplicate-conn': () => {
+    const source = activeConn();
+    if (!source) return toast('Select a connection to duplicate.');
+    const base = (source.name || PROVIDERS[source.provider]?.label || 'Connection').replace(/ \\(Copy(?: \\d+)?\\)$/, '');
+    let name = base + ' (Copy)';
+    let n = 2;
+    while (S.settings.connections.some(c => c.name === name)) name = base + ' (Copy ' + n++ + ')';
+    // Copy all profile fields, including the in-memory key. The existing
+    // secure-vault save path handles encryption of both profiles.
+    const copy = { ...source, id: db.uid(), name };
+    S.settings.connections.push(copy);
+    S.settings.activeConnection = copy.id;
+    saveSettings();
+    rerenderSettings();
+    toast('Connection duplicated. Change the model or name whenever you like.', 3500);
+  },
   'delete-conn': () => {
     if (!confirm('Delete this connection profile?')) return;
     S.settings.connections = S.settings.connections.filter((c) => c.id !== S.settings.activeConnection);
