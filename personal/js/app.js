@@ -5145,7 +5145,7 @@ const actions = {
   'duplicate-conn': () => {
     const source = activeConn();
     if (!source) return toast('Select a connection to duplicate.');
-    const base = (source.name || PROVIDERS[source.provider]?.label || 'Connection').replace(/ \\(Copy(?: \\d+)?\\)$/, '');
+    const base = (source.name || PROVIDERS[source.provider]?.label || 'Connection').replace(/ \(Copy(?: \d+)?\)$/, '');
     let name = base + ' (Copy)';
     let n = 2;
     while (S.settings.connections.some(c => c.name === name)) name = base + ' (Copy ' + n++ + ')';
