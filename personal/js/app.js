@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.19)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.20)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -695,6 +695,48 @@ async function openDatabaseManager() {
     </div>
   `, 'tall');
 }
+let ndbManualTab = false;
+let ndbManualDraft = '';
+let ndbManualSource = null;
+function ndbManualSelection() {
+  const chat = S.chat, length = chat.messages.length;
+  const from = Number($('#ndb-from')?.value), to = Number($('#ndb-to')?.value);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from || to > length) return null;
+  return { from, to, messages: chat.messages.slice(from - 1, to).filter(m => !m.hidden && NDB.messageText(m).trim()) };
+}
+function ndbManualEstimate() {
+  const range = ndbManualSelection();
+  const cfg = S.settings.ext.database;
+  const prior = $('#ndb-prior')?.checked ? (S.chat.narrativeDb?.text || '') : '';
+  const messages = range ? range.messages.reduce((sum, m) => sum + NDB.estimateTokens(NDB.messageText(m)) + 4, 0) : 0;
+  const previous = NDB.estimateTokens(prior);
+  const prompt = NDB.estimateTokens(evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} }));
+  const el = $('#ndb-estimate');
+  if (el) el.innerHTML = range
+    ? '<div>Selected messages: <b>≈' + messages.toLocaleString() + '</b></div><div>Previous summary: <b>≈' + previous.toLocaleString() + '</b></div><div>Prompt: <b>≈' + prompt.toLocaleString() + '</b></div><hr><div>Total estimated input: <b>≈' + (messages + previous + prompt).toLocaleString() + ' tokens</b></div><div>Configured output limit: <b>' + Number(cfg.maxOutputTokens || 12000).toLocaleString() + ' tokens</b></div>'
+    : '<span class="hint">Choose a valid message range to estimate tokens.</span>';
+}
+function ndbManualHtml(chat, cfg, prog) {
+  const length = chat.messages.length;
+  const start = Math.min(length || 1, (chat.narrativeDb?.covered || 0) + 1);
+  const prior = chat.narrativeDb?.text || '';
+  return `
+    <p class="hint">Generate one selected message range, inspect and edit the result, then save it as a checkpoint. The automatic updater resumes from that checkpoint.</p>
+    <div class="row wrap">
+      <label class="field"><span class="label">From message #</span><input id="ndb-from" type="number" min="1" max="${length}" value="${start}"></label>
+      <label class="field"><span class="label">To message #</span><input id="ndb-to" type="number" min="1" max="${length}" value="${length}"></label>
+    </div>
+    <label class="field inline"><input type="checkbox" id="ndb-prior" ${prior ? 'checked' : ''}><span>Include current narrative summary as context</span></label>
+    <div class="mem-stats" id="ndb-estimate"></div>
+    <p class="hint">Estimates are approximate, and exclude small API formatting overhead. Large inputs may exceed your model's context window.</p>
+    <button class="btn primary" data-action="ndb-manual-generate" ${prog ? 'disabled' : ''}>Generate Manual Summary</button>
+    <label class="field"><span class="label">Generated summary (editable)</span><textarea id="ndb-manual-output" rows="19" spellcheck="false" placeholder="Generate a preview, then review and correct it before saving.">${esc(ndbManualDraft)}</textarea></label>
+    <label class="field"><span class="label">Save behavior</span><select id="ndb-manual-mode"><option value="add">Add new checkpoint</option><option value="replace">Replace existing summary and invalidate later checkpoints</option></select></label>
+    <button class="btn primary" data-action="ndb-manual-save" ${prog ? 'disabled' : ''}>Save Reviewed Checkpoint</button>
+    <p class="hint">Only saving advances the automatic checkpoint. Replacing discards later summaries built on the incorrect record; chat messages are never changed.</p>
+    <hr><button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Existing Summary & Checkpoints</button>
+  `;
+}
 function databaseSheet() {
   const chat = S.chat;
   const cfg = S.settings.ext.database;
@@ -709,6 +751,8 @@ function databaseSheet() {
   openSheet(`
     <div class="sheet-title" id="ndb-sheet">Narrative Database ${prog ? '<span class="muted small">· processing…</span>' : ''}</div>
     <p class="hint">Independent of Summarize and Summaryception. Processes the original chat chronologically; the chat is never forked or deleted.</p>
+    <div class="row wrap"><button class="btn ${!ndbManualTab ? 'primary' : ''}" data-action="ndb-tab-auto">Automatic</button><button class="btn ${ndbManualTab ? 'primary' : ''}" data-action="ndb-tab-manual">Manual</button></div>
+    ${ndbManualTab ? ndbManualHtml(chat, cfg, prog) : `
     <div class="mem-stats">
       <div><b>${dbState?.covered || 0} / ${chat.messages.length}</b> messages covered</div>
       <div><b>≈${Math.round(pending / 1000)}k</b> pending tokens</div>
@@ -735,7 +779,16 @@ function databaseSheet() {
     <label class="field"><span class="label">Current database (editable)</span><textarea id="ndb-text" rows="19" spellcheck="false" placeholder="No database yet. Run Catch Up / Rebuild from Chat History.">${esc(dbState?.text || '')}</textarea></label>
     <button class="btn" data-action="ndb-save" ${prog ? 'disabled' : ''}>Save Manual Corrections</button>
     <p class="hint">Manual corrections become the input to the next update. Rebuild retains the active database until every batch succeeds.</p>
+    `}
   `, 'tall');
+  if (ndbManualTab) {
+    for (const id of ['ndb-from', 'ndb-to', 'ndb-prior']) {
+      const el = $('#' + id);
+      if (el) { el.addEventListener('input', ndbManualEstimate); el.addEventListener('change', ndbManualEstimate); }
+    }
+    $('#ndb-manual-output')?.addEventListener('input', e => { ndbManualDraft = e.target.value; });
+    ndbManualEstimate();
+  }
   updateDatabaseBanner();
 }
 
@@ -4693,6 +4746,55 @@ const actions = {
     S.chat = chat;
     databaseSheet();
   },
+  'ndb-tab-auto': () => { ndbManualTab = false; databaseSheet(); },
+  'ndb-tab-manual': () => { ndbManualTab = true; databaseSheet(); },
+  'ndb-manual-generate': async () => {
+    if (S.dbBusy) return toast('A Narrative Database operation is already running.');
+    const range = ndbManualSelection();
+    if (!range || !range.messages.length) return toast('Choose a valid, nonempty message range.');
+    const chat = S.chat, cfg = S.settings.ext.database;
+    const prior = $('#ndb-prior')?.checked ? (chat.narrativeDb?.text || '') : '';
+    const signature = NDB.fingerprint(chat.messages, range.to);
+    const batch = { messages: range.messages };
+    const system = evaluateMacros(cfg.prompt, { char: S.char?.name || '', user: activePersona().name || 'User', vars: {} });
+    const input = NDB.buildUpdateInput(prior, batch, memNameOf);
+    S.dbBusy = true;
+    const btn = $('[data-action="ndb-manual-generate"]');
+    if (btn) btn.disabled = true;
+    try {
+      const output = NDB.checkedDatabase(await memCall(system, input, Math.max(1024, Number(cfg.maxOutputTokens) || 12000), cfg.model));
+      if (NDB.fingerprint(chat.messages, range.to) !== signature) throw new Error('Chat history changed while generating; please retry.');
+      ndbManualDraft = output;
+      ndbManualSource = { chatId: chat.id, from: range.from, to: range.to, signature, prior };
+      const field = $('#ndb-manual-output');
+      if (field) field.value = output;
+      toast('Preview generated. Review and save when ready.');
+    } catch (e) { toast('Manual summary failed: ' + (e.message || e), 7000); }
+    finally { S.dbBusy = false; if (btn) btn.disabled = false; }
+  },
+  'ndb-manual-save': async () => {
+    if (S.dbBusy) return toast('Wait for the current operation to finish.');
+    const chat = S.chat, source = ndbManualSource, range = ndbManualSelection();
+    const result = ($('#ndb-manual-output')?.value || '').trim();
+    if (!source || source.chatId !== chat.id || !range || range.from !== source.from || range.to !== source.to) return toast('Generate a preview for this exact range before saving.');
+    if (NDB.fingerprint(chat.messages, range.to) !== source.signature) return toast('Chat history changed. Regenerate before saving.');
+    if (!result) return toast('The reviewed summary is empty.');
+    const mode = $('#ndb-manual-mode')?.value || 'add';
+    const old = chat.narrativeDb;
+    if (mode === 'add' && old?.covered && (NDB.isStale(chat.messages, old) || range.from !== old.covered + 1)) return toast('Add New must begin immediately after the current checkpoint. Choose Replace to correct earlier history.');
+    if (mode === 'replace' && !confirm('Replace the active summary and discard later checkpoints? This cannot be undone. Chat messages will remain intact.')) return;
+    if (mode === 'add' && old?.covered && !source.prior) return toast('Include the previous summary to extend an existing checkpoint, or use Replace.');
+    const signature = NDB.fingerprint(chat.messages, range.to);
+    const at = Date.now();
+    const checkpoints = mode === 'add' ? [...(old?.checkpoints || []).filter(c => c.covered < range.to)] : [];
+    checkpoints.push({ covered: range.to, at, text: result, signature });
+    chat.narrativeDb = { text: result, covered: range.to, signature, at, checkpoints: checkpoints.slice(-20) };
+    delete chat.narrativeDbPending; delete chat.narrativeDbLastError; delete chat.narrativeDbErrorBatch;
+    await saveChat(chat);
+    ndbManualDraft = ''; ndbManualSource = null;
+    toast('Reviewed checkpoint saved. Automatic summarization can resume.');
+    databaseSheet();
+  },
   'ndb-update': () => runDatabase(S.chat, { flush: true }),
   'ndb-dismiss-error': async () => {
     if (!S.chat) return;
@@ -4726,6 +4828,7 @@ const actions = {
   'ndb-clear': async () => {
     if (!confirm('Clear Narrative Database for this chat? Chat messages and other memory systems remain untouched.')) return;
     delete S.chat.narrativeDb; delete S.chat.narrativeDbPending; delete S.chat.narrativeDbLastError; delete S.chat.narrativeDbErrorBatch; delete S.chat.narrativeDbErrorBatch;
+    ndbManualDraft = ''; ndbManualSource = null;
     await saveChat(S.chat); databaseSheet();
   },
   'ndb-save': async () => {
