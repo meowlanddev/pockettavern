@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.21)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.22)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -698,6 +698,31 @@ async function openDatabaseManager() {
 let ndbManualTab = false;
 let ndbManualDraft = '';
 let ndbManualSource = null;
+let ndbViewedCheckpoint = '';
+function ndbCheckpointChoices(chat) {
+  const db = chat.narrativeDb;
+  const entries = [...(db?.checkpoints || []), ...(chat.narrativeDbPending?.checkpoints || [])];
+  if (db?.text) entries.push({ covered: db.covered, text: db.text, at: db.at, signature: db.signature, current: true });
+  const unique = new Map();
+  for (const cp of entries) {
+    if (!cp?.text || !Number.isInteger(cp.covered)) continue;
+    const key = cp.covered + ':' + (cp.at || 0);
+    unique.set(key, cp);
+  }
+  return [...unique.values()].sort((a, b) => b.covered - a.covered || (b.at || 0) - (a.at || 0));
+}
+function ndbCheckpointPreview(chat) {
+  const choices = ndbCheckpointChoices(chat);
+  const selected = choices.find(cp => (cp.covered + ':' + (cp.at || 0)) === ndbViewedCheckpoint);
+  const cp = selected || choices[0];
+  if (!cp) return '<p class="hint">No saved checkpoints yet. Generate or update the database to create some.</p>';
+  const valid = cp.signature && NDB.fingerprint(chat.messages, cp.covered) === cp.signature;
+  const when = cp.at ? new Date(cp.at).toLocaleString() : 'Unknown date';
+  return '<div class="hint">Saved ' + esc(when) + ' · through message ' + cp.covered + ' of ' + chat.messages.length +
+    ' · ' + (valid ? 'Matches current chat history' : 'Historical snapshot (chat may have changed)') +
+    '</div><textarea rows="16" spellcheck="false" readonly aria-label="Historical checkpoint summary">' + esc(cp.text) + '</textarea>';
+}
+
 function ndbManualSelection() {
   const chat = S.chat, length = chat.messages.length;
   const from = Number($('#ndb-from')?.value), to = Number($('#ndb-to')?.value);
@@ -721,6 +746,17 @@ function ndbManualHtml(chat, cfg, prog) {
   const start = Math.min(length || 1, (chat.narrativeDb?.covered || 0) + 1);
   const prior = chat.narrativeDb?.text || '';
   return `
+    <div class="field"><span class="label">Browse saved checkpoints (read-only)</span>
+      <select id="ndb-checkpoint-select">
+        ${ndbCheckpointChoices(chat).map(cp => {
+          const value = cp.covered + ':' + (cp.at || 0);
+          const selected = ndbViewedCheckpoint ? value === ndbViewedCheckpoint : cp === ndbCheckpointChoices(chat)[0];
+          return '<option value="' + esc(value) + '"' + (selected ? ' selected' : '') + '>Through message ' + cp.covered + ' · ' + esc(cp.at ? new Date(cp.at).toLocaleString() : 'Undated') + (cp.current ? ' · current' : '') + '</option>';
+        }).join('')}
+      </select>
+      <div id="ndb-checkpoint-preview">${ndbCheckpointPreview(chat)}</div>
+      <p class="hint">Select older checkpoints to see exactly what the database said then. Browsing never changes the active summary or your manual draft. Only retained checkpoints can be viewed (up to 20 per checkpoint history).</p>
+    </div>
     <p class="hint">Generate one selected message range, inspect and edit the result, then save it as a checkpoint. The automatic updater resumes from that checkpoint.</p>
     <div class="row wrap">
       <label class="field"><span class="label">From message #</span><input id="ndb-from" type="number" min="1" max="${length}" value="${start}"></label>
@@ -787,6 +823,11 @@ function databaseSheet() {
       if (el) { el.addEventListener('input', ndbManualEstimate); el.addEventListener('change', ndbManualEstimate); }
     }
     $('#ndb-manual-output')?.addEventListener('input', e => { ndbManualDraft = e.target.value; });
+    $('#ndb-checkpoint-select')?.addEventListener('change', e => {
+      ndbViewedCheckpoint = e.target.value;
+      const preview = $('#ndb-checkpoint-preview');
+      if (preview) preview.innerHTML = ndbCheckpointPreview(S.chat);
+    });
     ndbManualEstimate();
   }
   updateDatabaseBanner();
