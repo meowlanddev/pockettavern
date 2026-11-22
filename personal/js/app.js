@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.23)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.24)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -757,7 +757,7 @@ function ndbManualHtml(chat, cfg, prog) {
       <div id="ndb-checkpoint-preview">${ndbCheckpointPreview(chat)}</div>
       <p class="hint">Select older checkpoints to see exactly what the database said then. Browsing never changes the active summary or your manual draft. Only retained checkpoints can be viewed (up to 20 per checkpoint history).</p>
     </div>
-    <p class="hint">Generate one selected message range, inspect and edit the result, then save it as a checkpoint. The automatic updater resumes from that checkpoint.</p>
+    <p class="hint">Paste or write a complete summary below and save it directly, or generate a summary from a selected message range first. Saving sets the checkpoint through the selected ending message.</p>
     <div class="row wrap">
       <label class="field"><span class="label">From message #</span><input id="ndb-from" type="number" min="1" max="${length}" value="${start}"></label>
       <label class="field"><span class="label">To message #</span><input id="ndb-to" type="number" min="1" max="${length}" value="${length}"></label>
@@ -766,9 +766,9 @@ function ndbManualHtml(chat, cfg, prog) {
     <div class="mem-stats" id="ndb-estimate"></div>
     <p class="hint">Estimates are approximate, and exclude small API formatting overhead. Large inputs may exceed your model's context window.</p>
     <button class="btn primary" data-action="ndb-manual-generate" ${prog ? 'disabled' : ''}>Generate Manual Summary</button>
-    <label class="field"><span class="label">Generated summary (editable)</span><textarea id="ndb-manual-output" rows="19" spellcheck="false" placeholder="Generate a preview, then review and correct it before saving.">${esc(ndbManualDraft)}</textarea></label>
+    <label class="field"><span class="label">Summary (paste, write, or generate)</span><textarea id="ndb-manual-output" rows="19" spellcheck="false" placeholder="Paste your complete narrative summary here, or generate one.">${esc(ndbManualDraft)}</textarea></label>
     <label class="field"><span class="label">Save behavior</span><select id="ndb-manual-mode"><option value="add">Add new checkpoint</option><option value="replace">Replace existing summary and invalidate later checkpoints</option></select></label>
-    <button class="btn primary" data-action="ndb-manual-save" ${prog ? 'disabled' : ''}>Save Reviewed Checkpoint</button>
+    <button class="btn primary" data-action="ndb-manual-save" ${prog ? 'disabled' : ''}>Save Summary as Checkpoint</button>
     <p class="hint">Only saving advances the automatic checkpoint. Replacing discards later summaries built on the incorrect record; chat messages are never changed.</p>
     <hr><button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Existing Summary & Checkpoints</button>
   `;
@@ -4831,14 +4831,18 @@ const actions = {
     if (S.dbBusy) return toast('Wait for the current operation to finish.');
     const chat = S.chat, source = ndbManualSource, range = ndbManualSelection();
     const result = ($('#ndb-manual-output')?.value || '').trim();
-    if (!source || source.chatId !== chat.id || !range || range.from !== source.from || range.to !== source.to) return toast('Generate a preview for this exact range before saving.');
-    if (NDB.fingerprint(chat.messages, range.to) !== source.signature) return toast('Chat history changed. Regenerate before saving.');
-    if (!result) return toast('The reviewed summary is empty.');
+    if (!range) return toast('Choose a valid message range to mark as covered by this summary.');
+    if (!result) return toast('Paste or write a summary before saving.');
+    // Generated previews must still match their source range. Hand-written or
+    // pasted summaries do not need a model call or generated preview.
+    const generatedForRange = source?.chatId === chat.id && range.from === source.from && range.to === source.to;
+    if (generatedForRange && NDB.fingerprint(chat.messages, range.to) !== source.signature)
+      return toast('Chat history changed since generation. Regenerate or paste a new summary.');
     const mode = $('#ndb-manual-mode')?.value || 'add';
     const old = chat.narrativeDb;
     if (mode === 'add' && old?.covered && (NDB.isStale(chat.messages, old) || range.from !== old.covered + 1)) return toast('Add New must begin immediately after the current checkpoint. Choose Replace to correct earlier history.');
     if (mode === 'replace' && !confirm('Replace the active summary and discard later checkpoints? This cannot be undone. Chat messages will remain intact.')) return;
-    if (mode === 'add' && old?.covered && !source.prior) return toast('Include the previous summary to extend an existing checkpoint, or use Replace.');
+    if (mode === 'add' && old?.covered && generatedForRange && !source.prior) return toast('Include the previous summary to extend an existing checkpoint, or use Replace.');
     const signature = NDB.fingerprint(chat.messages, range.to);
     const at = Date.now();
     const checkpoints = mode === 'add' ? [...(old?.checkpoints || []).filter(c => c.covered < range.to)] : [];
