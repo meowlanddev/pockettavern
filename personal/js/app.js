@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.22)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.23)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -787,6 +787,13 @@ function databaseSheet() {
   openSheet(`
     <div class="sheet-title" id="ndb-sheet">Narrative Database ${prog ? '<span class="muted small">· processing…</span>' : ''}</div>
     <p class="hint">Independent of Summarize and Summaryception. Processes the original chat chronologically; the chat is never forked or deleted.</p>
+    <label class="field"><span class="label">Summary update mode (this chat)</span>
+      <select id="ndb-update-mode" ${prog ? 'disabled' : ''}>
+        <option value="automatic" ${!chat.narrativeDbManualOnly ? 'selected' : ''}>Automatic updates</option>
+        <option value="manual" ${chat.narrativeDbManualOnly ? 'selected' : ''}>Manual only — never update automatically</option>
+      </select>
+      <span class="hint">${chat.narrativeDbManualOnly ? 'Manual only: the saved summary stays active for roleplay, but new messages will not trigger automatic summarization.' : 'Automatic: new messages can trigger background database updates.'} This setting is saved per chat.</span>
+    </label>
     <div class="row wrap"><button class="btn ${!ndbManualTab ? 'primary' : ''}" data-action="ndb-tab-auto">Automatic</button><button class="btn ${ndbManualTab ? 'primary' : ''}" data-action="ndb-tab-manual">Manual</button></div>
     ${ndbManualTab ? ndbManualHtml(chat, cfg, prog) : `
     <div class="mem-stats">
@@ -830,12 +837,19 @@ function databaseSheet() {
     });
     ndbManualEstimate();
   }
+  $('#ndb-update-mode')?.addEventListener('change', async e => {
+    if (S.dbBusy) { toast('Wait for the current database operation to finish.'); databaseSheet(); return; }
+    chat.narrativeDbManualOnly = e.target.value === 'manual';
+    await saveChat(chat);
+    toast(chat.narrativeDbManualOnly ? 'Manual only: automatic narrative updates disabled for this chat.' : 'Automatic narrative updates enabled for this chat.');
+    databaseSheet();
+  });
   updateDatabaseBanner();
 }
 
 async function runDatabase(chat, { rebuild = false, flush = false, silent = false, restart = false } = {}) {
   const cfg = S.settings.ext.database;
-  if (S.dbBusy || (!cfg.enabled && silent)) return;
+  if (S.dbBusy || (silent && (!cfg.enabled || chat?.narrativeDbManualOnly))) return;
   if (!chat || !chat.messages.length) { if (!silent) toast('No chat messages to process.'); return; }
   const old = chat.narrativeDb || null;
   if (!rebuild && NDB.isStale(chat.messages, old)) {
@@ -987,7 +1001,7 @@ This is STORY memory. Protect the psychological causes of behavior, not merely t
 
 function maybeDatabase(chat) {
   const cfg = S.settings.ext.database;
-  if (!cfg.enabled || S.dbBusy) return;
+  if (!cfg.enabled || S.dbBusy || chat?.narrativeDbManualOnly) return;
   const state = chat.narrativeDb;
   if (NDB.isStale(chat.messages, state)) {
     if (!S.dbStaleWarned) S.dbStaleWarned = new Set();
