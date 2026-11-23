@@ -17,7 +17,7 @@ import * as NDB from './narrative-db.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.24)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.25)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -207,7 +207,7 @@ function promptFor(chat, char, history, opts = {}) {
     mode: opts.mode || 'normal', group, quietPrompt: opts.quietPrompt || '',
     summary: summaryFor(chat), timed: structuredClone(chat.wiTimed || {}),
     memory: memoryFor(chat), continuity: continuityFor(chat),
-    narrativeDatabase: history.length >= (chat.narrativeDb?.covered || 0) ? databaseFor(chat) : null,
+    narrativeDatabase: databaseFor(chat),
     vision: S.settings.ext.vision,
     recall: opts.recall ? { text: opts.recall, depth: S.settings.ext.recall.depth, template: S.settings.ext.recall.template } : null,
   });
@@ -478,14 +478,18 @@ async function updateExpressionPanel() {
 function databaseFor(chat) {
   const cfg = S.settings.ext.database;
   const state = chat.narrativeDb;
-  if (!cfg.enabled || !state || !state.text || NDB.isStale(chat.messages, state)) return null;
-  return { text: state.text, position: cfg.position, depth: cfg.depth, role: cfg.role, template: cfg.template, covered: state.covered, recentTokens: cfg.recentTokens };
+  // Manual-only summaries remain active even when global automatic processing is
+  // disabled or chat history changes. Their content is controlled by the user.
+  if (!state?.text || (!cfg.enabled && !chat.narrativeDbManualOnly)) return null;
+  if (!chat.narrativeDbManualOnly && NDB.isStale(chat.messages, state)) return null;
+  return { text: state.text, position: cfg.position, depth: cfg.depth, role: cfg.role, template: cfg.template,
+    covered: Math.min(chat.messages.length, Math.max(0, Number(state.covered) || 0)), recentTokens: cfg.recentTokens };
 }
 
 function memoryFor(chat) {
   const cfg = S.settings.ext.memory;
   const text = MEM.assembleMemory(chat.mem);
-  if (S.settings.ext.database.enabled || !S.settings.ext.memory.enabled || !text) return null;
+  if ((S.settings.ext.database.enabled || chat.narrativeDbManualOnly) || !S.settings.ext.memory.enabled || !text) return null;
   return { text, position: cfg.enabled ? cfg.position : 'macro', depth: cfg.depth, role: cfg.role, template: cfg.template };
 }
 
