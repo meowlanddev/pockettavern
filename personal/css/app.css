@@ -683,3 +683,4 @@ button.pt-install-message { border: 0; background: transparent; cursor: pointer;
 .wf-hidden .wf-text { text-decoration: line-through; }
 .wf-old { opacity: .6; }
 .wf-conf { border: 1px solid rgba(128,128,128,.35); border-radius: 12px; padding: 4px 10px 10px; margin: 8px 0; }
+#wf-meter { padding: 6px 8px; border-radius: 8px; background: var(--surface-2, rgba(127,127,127,.12)); margin: 6px 0 10px; }

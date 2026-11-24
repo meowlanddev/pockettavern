@@ -60,7 +60,7 @@ function formatExamples(raw, heading) {
  * group: { names: 'A, B', nameOf(msg) } for group chats (names are prefixed to history, nudge added)
  * Returns { messages, stats, vars }
  */
-export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null, memory = null, narrativeDatabase = null, continuity = '', vision = null, recall = null }) {
+export function buildPrompt({ char, persona, settings, chat, history, preset, lorebooks, regexScripts, model, embeddedEntries, mode = 'normal', group = null, quietPrompt = '', summary = null, timed = null, memory = null, narrativeDatabase = null, weft = null, continuity = '', vision = null, recall = null }) {
   // Ghosted messages are covered by long-term memory and not sent (they stay visible in the chat).
   const fullLength = history.length; // timed lorebook effects count every message
   // DB-covered messages stay in the original chat, but leave the generation prompt.
@@ -76,6 +76,9 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
       used += cost; recentStart = i;
     }
     history = history.slice(Math.min(narrativeDatabase.covered || 0, recentStart));
+  } else if (weft && weft.trimTo > 0) {
+    // WEFT: messages already turned into scene records leave the prompt; the newest few stay word-for-word.
+    history = history.slice(Math.min(history.length, weft.trimTo));
   }
   history = history.filter((m) => !(settings.ext.memory.enabled && m.ghost) && !m.hidden);
   const P = settings.prompt;
@@ -206,6 +209,11 @@ export function buildPrompt({ char, persona, settings, chat, history, preset, lo
     if (d.position === 'chat') injections.push({ depth: Number(d.depth) || 0, order: 35, role: d.role || 'system', content });
     else if (d.position === 'prompt') blocks.splice(mainAt + 1, 0, { role: d.role || 'system', content });
     else blocks.unshift({ role: d.role || 'system', content });
+  }
+  if (weft && weft.text) { // already written as settled history; not run through macros because it quotes the chat
+    if (weft.position === 'chat') injections.push({ depth: Number(weft.depth) || 0, order: 36, role: weft.role || 'system', content: weft.text });
+    else if (weft.position === 'prompt') blocks.splice(mainAt + 1, 0, { role: weft.role || 'system', content: weft.text });
+    else blocks.unshift({ role: weft.role || 'system', content: weft.text });
   }
   if (continuity && continuity.trim()) injections.push({ depth: 0, order: 30, role: 'system', content: macro(continuity) });
 

@@ -1,0 +1,124 @@
+// Run: node --experimental-default-type=module tests/weft-inject.test.mjs
+import assert from 'node:assert/strict';
+import { buildArchive, newReview, setFlag } from '../js/weft-archive.js';
+import { rangeFingerprint } from '../js/weft.js';
+import { budgetFor, usableScenes, mentioned, matchScenes, properWords, pinLines, pinTokens, buildInjection, DEFAULT_INJECT } from '../js/weft-inject.js';
+
+const msg = (role, text) => ({ role, swipes: [text], swipeIdx: 0 });
+const filler = 'The afternoon went on quietly while they talked about nothing in particular. ';
+
+// budget grows with the chat and is clamped
+assert.equal(budgetFor(0), 1500);
+assert.equal(budgetFor(100000), 1500);
+assert.equal(budgetFor(340000), 2700);
+assert.equal(budgetFor(5000000), 4000);
+assert.equal(budgetFor(340000, { injectMin: 1500, injectMax: 2000 }), 2000);
+
+// properWords: capitalised words that never appear lower-case
+const pw = properWords('Marek said the truck was ready. Then the Tuscarawas deputy came, and the door shut. Door.');
+assert.ok(pw.has('marek') && pw.has('tuscarawas'));
+assert.ok(!pw.has('door') && !pw.has('then'));
+
+// --- a 6-scene chat of 60 messages (10 per scene)
+const messages = [];
+for (let i = 0; i < 60; i++) messages.push(msg(i % 2 ? 'assistant' : 'user', `Message ${i + 1}. ${filler.repeat(3)}`));
+const mkScene = (n, over = {}) => {
+  const from = (n - 1) * 10 + 1, to = n * 10;
+  return { id: `s${from}-${to}`, from, to, tokens: 500, fingerprint: rangeFingerprint(messages, from, to), summary: `Summary of scene ${n}.`,
+    names: [], facts: [], relationships: [], continues: false, ...over };
+};
+const scenes = [
+  mkScene(1, { summary: 'Rachel met Marek at the Akron glass shop and learned the truck was an F-150.', names: ['Rachel', 'Marek', 'Akron glass shop'],
+    facts: [{ name: 'Marek', durability: 'durable', text: 'Marek runs a tow and glass shop in Akron' }, { name: 'Rachel', durability: 'durable', text: 'Rachel drives a Civic' }] }),
+  mkScene(2, { names: ['Rachel'], facts: [{ name: 'Rachel', durability: 'temporary', text: 'Rachel has a grade-two ankle sprain' }, { name: 'Sam', durability: 'durable', text: 'Sam is a nurse at the clinic' }] }),
+  mkScene(3, { names: ['Rachel'], facts: [{ name: 'Rachel', durability: 'durable', text: 'Rachel lives in unit 1104' }] }),
+  mkScene(4, { names: ['Rachel', 'Sam'], facts: [{ name: 'Sam', durability: 'durable', text: 'Sam grew up in Tuscarawas County' }] }),
+  mkScene(5, { names: ['Rachel'], facts: [{ name: 'Rachel', durability: 'temporary', text: 'Rachel wears a brace on the left ankle' }] }),
+  mkScene(6, { names: ['Rachel'], facts: [] }),
+];
+const review = newReview();
+const archive = () => buildArchive(scenes, review);
+
+// scenes stay usable until a message inside one is edited
+assert.equal(usableScenes(messages, scenes).length, 6);
+const edited = messages.map((m, i) => (i === 25 ? msg('assistant', 'changed') : m));
+assert.equal(usableScenes(edited, scenes).length, 2); // scene 3 (messages 21-30) no longer matches; later ones are dropped too
+assert.equal(usableScenes(messages.slice(0, 35), scenes).length, 3);
+
+// nothing built: no block
+assert.equal(buildInjection({ messages, scenes: [], archive: archive() }).text, '');
+
+// ordinary reply: nobody named -> no entries, no pins, nothing injected
+const quiet = buildInjection({ messages, scenes, archive: archive() });
+assert.equal(quiet.text, '');
+assert.equal(quiet.covered, 60);
+
+// pins are always sent, even when nobody is named
+const a0 = archive();
+const marekFact = a0.entities.flatMap((e) => e.groups).find((g) => /Akron/.test(g.text));
+setFlag(review, marekFact.key, { pin: 'yes' });
+const pinned = buildInjection({ messages, scenes, archive: archive() });
+assert.match(pinned.text, /Always true:\n- Marek: Marek runs a tow and glass shop in Akron/);
+assert.equal(pinned.items.length, 1);
+assert.equal(pinned.items[0].kind, 'pin');
+assert.equal(pinTokens(archive().entities), pinned.pins);
+assert.match(pinned.text, /not instructions/);
+
+// hidden / deleted / superseded facts are never sent, even if pinned
+setFlag(review, marekFact.key, { hide: true });
+assert.equal(pinLines(archive().entities).length, 0);
+setFlag(review, marekFact.key, { hide: false });
+assert.equal(pinLines(archive().entities).length, 1);
+
+// named in the last messages -> that entry is added, with its reason
+const named = messages.slice();
+named[58] = msg('user', 'Sam walked over to check the brace.');
+const withSam = buildInjection({ messages: named, scenes, archive: archive() });
+assert.match(withSam.text, /Who and what is in play:\nSam: /);
+assert.match(withSam.text, /Sam is a nurse at the clinic/);
+assert.ok(withSam.items.some((i) => i.kind === 'entry' && i.label === 'Sam' && /named/.test(i.reason)));
+assert.ok(!/Rachel:/.test(withSam.text.split('Who and what is in play:')[1] || ''));
+
+// main character (in most scenes): only facts that match the recent text, not everything
+const rach = named.slice();
+rach[59] = msg('assistant', 'Rachel shifted her weight off the sprained left ankle in the brace.');
+const withRachel = buildInjection({ messages: rach, scenes, archive: archive() });
+assert.match(withRachel.text, /Rachel: .*ankle/);
+assert.ok(!/unit 1104/.test(withRachel.text)); // no overlap with the recent text: stays out
+const plain = named.slice();
+plain[59] = msg('assistant', 'Rachel laughed quietly.');
+const rOnly = buildInjection({ messages: plain, scenes, archive: archive() });
+assert.ok(!rOnly.items.some((i) => i.label === 'Rachel'));
+assert.ok(rOnly.skipped.some((s) => s.label === 'Rachel'));
+
+// past scenes: only when the recent messages name several of its names (or one found in just that scene)
+const hit = messages.slice();
+hit[59] = msg('assistant', 'Marek called from the Akron glass shop about the truck.');
+const small = { injectRecentTokens: 200 }; // keep only the last few messages word-for-word
+const hitRes = buildInjection({ messages: hit, scenes, archive: archive(), cfg: small });
+assert.ok(hitRes.items.some((i) => i.kind === 'scene' && i.label === 'Scene 1-10'));
+assert.match(hitRes.text, /Earlier scenes that connect to this moment:\n- \(messages 1-10\) Rachel met Marek/);
+// a scene that is still word-for-word in the prompt is not repeated
+const near = buildInjection({ messages: hit, scenes, archive: archive(), cfg: { injectRecentTokens: 100000 } });
+assert.ok(!near.items.some((i) => i.kind === 'scene'));
+assert.equal(near.verbatimFrom, 0);
+// matching a name every scene has (Rachel) never recalls a scene
+const everywhere = messages.slice();
+everywhere[59] = msg('assistant', 'Rachel Rachel Rachel.');
+assert.ok(!buildInjection({ messages: everywhere, scenes, archive: archive(), cfg: small }).items.some((i) => i.kind === 'scene'));
+
+// matchScenes with too few scenes never fires
+assert.deepEqual(matchScenes(scenes.slice(0, 2), 'Marek Akron', { max: 2, skipFrom: null }), []);
+
+// budget: scenes drop first, then entries; pins stay
+const longScenes = scenes.map((sc, i) => (i === 0 ? { ...sc, summary: sc.summary + ' ' + 'More detail about what happened. '.repeat(60) } : sc));
+const tight = buildInjection({ messages: hit, scenes: longScenes, archive: buildArchive(longScenes, review), cfg: { ...small, injectMin: 300, injectMax: 300 } });
+assert.ok(tight.skipped.some((s) => s.reason === 'over budget'));
+assert.ok(tight.items.some((i) => i.kind === 'pin'));
+assert.ok(!tight.items.some((i) => i.kind === 'scene'));
+
+// only scenes up to the last one that still matches the chat are used; the tail stays in the chat
+const tailEdited = messages.map((m, i) => (i === 55 ? msg('assistant', 'edited later') : m));
+assert.equal(buildInjection({ messages: tailEdited, scenes, archive: archive() }).covered, 50);
+assert.deepEqual(Object.keys(DEFAULT_INJECT).filter((k) => !k.startsWith('inject')), []);
+console.log('weft-inject tests passed');
