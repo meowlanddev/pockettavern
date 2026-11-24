@@ -22,7 +22,7 @@ import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.39)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.40)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -5165,7 +5165,7 @@ const actions = {
   'weft-fact-edit-cancel': (el) => { weftEditing.delete(el.dataset.k); weftRefresh(el.dataset.k); },
   'weft-fact-edit-save': (el) => {
     const t = (document.getElementById('wf-ed-' + el.dataset.k)?.value || '').replace(/\s+/g, ' ').trim().slice(0, 600);
-    if (!t) return toast('A fact can't be empty. Use Delete to remove it.', 3500);
+    if (!t) return toast('A fact cannot be empty. Use Delete to remove it.', 3500);
     weftEditing.delete(el.dataset.k);
     return weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { txt: g && t === g.orig ? null : t }));
   },
