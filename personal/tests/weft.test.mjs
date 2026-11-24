@@ -46,6 +46,9 @@ assert.equal(cut.end, 14); assert.equal(cut.forced, false);
 // model never finds a boundary: force cut at max (3000 tokens ≈ 28 messages)
 cut = await W.findSceneEnd({ messages: msgs, start: 0, minTokens: 1000, maxTokens: 3000, speaker, askBoundary: ask([]) });
 assert.equal(cut.forced, true); assert.ok(cut.end >= 27 && cut.end <= 29, `forced end ${cut.end}`);
+// over-splitting model: proposes many breaks; we take the valid one nearest the target size, not the first
+cut = await W.findSceneEnd({ messages: msgs, start: 0, minTokens: 1000, maxTokens: 3000, targetTokens: 2000, speaker, askBoundary: ask([3, 8, 20, 26]) });
+assert.equal(cut.end, 19); // #20 -> ~1976 tokens, closest to 2000; #3/#8 are under the minimum, #26 is further from target
 // garbled reply behaves like "no boundary"
 cut = await W.findSceneEnd({ messages: msgs, start: 0, minTokens: 1000, maxTokens: 3000, speaker, askBoundary: async () => 'lol idk' });
 assert.equal(cut.forced, true);

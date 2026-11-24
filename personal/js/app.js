@@ -20,7 +20,7 @@ import * as WEFT from './weft.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.28)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.29)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3973,6 +3973,7 @@ function renderSettingsView(open) {
     <button class="btn" data-action="weft-open">Open WEFT scenes for this chat</button>
     <label class="field"><span class="label">Scene model (optional, blank = current model)</span><input data-ext-weft="model" value="${esc(S.settings.ext.weft.model)}" autocapitalize="off"></label>
     <label class="field inline"><span class="label">Min scene size<span class="hint">estimated tokens</span></span><input inputmode="numeric" data-ext-weft="minSceneTokens" value="${S.settings.ext.weft.minSceneTokens}"></label>
+    <label class="field inline"><span class="label">Target scene size<span class="hint">estimated tokens; the model's breaks nearest this are used</span></span><input inputmode="numeric" data-ext-weft="targetSceneTokens" value="${S.settings.ext.weft.targetSceneTokens}"></label>
     <label class="field inline"><span class="label">Max scene size<span class="hint">estimated tokens; longer scenes are cut</span></span><input inputmode="numeric" data-ext-weft="maxSceneTokens" value="${S.settings.ext.weft.maxSceneTokens}"></label>
     <label class="field inline"><span class="label">Scene record length<span class="hint">max output tokens</span></span><input inputmode="numeric" data-ext-weft="maxOutputTokens" value="${S.settings.ext.weft.maxOutputTokens}"></label>
     <label class="field inline"><span class="label">Seconds between calls<span class="hint">21 fits a 3-per-minute limit; 0 = no pacing</span></span><input inputmode="numeric" data-ext-weft="callIntervalSec" value="${S.settings.ext.weft.callIntervalSec}"></label>
@@ -5644,7 +5645,7 @@ document.addEventListener('input', (e) => {
     saveSettings();
   } else if (el.dataset.extWeft) {
     const k = el.dataset.extWeft;
-    S.settings.ext.weft[k] = ['minSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
+    S.settings.ext.weft[k] = ['minSceneTokens','targetSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
     saveSettings();
   } else if (el.dataset.extMem) {
     const k = el.dataset.extMem;
@@ -5956,7 +5957,11 @@ async function boot() {
       summarize: { ...def.ext.summarize, ...((settings.ext || {}).summarize || {}) },
       memory: { ...def.ext.memory, ...((settings.ext || {}).memory || {}) },
       database: { ...def.ext.database, ...((settings.ext || {}).database || {}) },
-      weft: { ...def.ext.weft, ...((settings.ext || {}).weft || {}) },
+      weft: (() => { // saved values win, but a newer default version replaces the old size limits and prompts
+        const sv = (settings.ext || {}).weft || {}, w = { ...def.ext.weft, ...sv };
+        if (sv.v !== def.ext.weft.v) Object.assign(w, { v: def.ext.weft.v, minSceneTokens: def.ext.weft.minSceneTokens, targetSceneTokens: def.ext.weft.targetSceneTokens, maxSceneTokens: def.ext.weft.maxSceneTokens, maxOutputTokens: def.ext.weft.maxOutputTokens, boundaryPrompt: def.ext.weft.boundaryPrompt, scenePrompt: def.ext.weft.scenePrompt });
+        return w;
+      })(),
       ...Object.fromEntries(Object.keys(X.DEFAULT_EXT).map((k) => [k, { ...def.ext[k], ...((settings.ext || {})[k] || {}) }])),
     },
     appearance: { ...def.appearance, ...(settings.appearance || {}) },

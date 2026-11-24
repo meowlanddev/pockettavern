@@ -4,8 +4,12 @@
 import { messageText, estimateTokens } from './narrative-db.js';
 
 export const BOUNDARY_PROMPT = `You split a roleplay transcript into scenes. Messages are numbered like [#12].
-A NEW scene begins when the location changes, a meaningful amount of time passes, the people involved change, or a major beat clearly ends and a different one starts. Do NOT split on ordinary back-and-forth, small mood shifts, or a change of topic inside the same place and moment.
-Reply with ONLY a JSON array of the message numbers where a new scene begins, in ascending order. Never include the first message. If the whole passage is one scene, reply [].`;
+A scene is one continuous stretch in the same place and the same stretch of time, so it can be long. Start a NEW scene only when one of these clearly happens:
+- the location changes (they leave the room, travel, arrive somewhere else);
+- time jumps forward (overnight, the next day, hours or days later, a time-skip or chapter break);
+- the main characters separate, or a different set of characters takes over the story.
+Do NOT split because the mood, activity or topic changes inside the same place and time. A conversation, then intimacy, then aftercare, then a meal in the same room is ONE scene. Arguments, confessions, emotional shifts and phone calls made from the same room do not start a new scene.
+Most passages contain few breaks, and many contain none. Reply with ONLY a JSON array of the message numbers where a new scene begins, in ascending order. Never include the first message. If the whole passage is one scene, reply [].`;
 
 export const SCENE_PROMPT = `You write one permanent memory record for a roleplay scene, so the story can be recalled accurately later.
 Rules:
@@ -22,8 +26,10 @@ RELATIONSHIPS: <one per line, formatted "- A & B | what changed between them". O
 export const DEFAULT_WEFT_SETTINGS = Object.freeze({
   enabled: false,
   model: '',
-  minSceneTokens: 1000,
-  maxSceneTokens: 12000,
+  v: 2, // bump to replace saved prompts/sizes with new defaults on next load
+  minSceneTokens: 4000,
+  targetSceneTokens: 9000,
+  maxSceneTokens: 14000,
   maxOutputTokens: 1100,
   callIntervalSec: 21, // 3 requests per minute = one call every 20s; 21 leaves a little slack
   boundaryPrompt: BOUNDARY_PROMPT,
@@ -68,7 +74,8 @@ export function parseBoundaries(raw, minNum, maxNum) {
 // Decide where the scene starting at message index `start` ends.
 // Returns { end } (exclusive index, so the scene is messages[start..end)) or null if the scene is still open.
 // The model proposes cuts; size limits override it: no scene under min tokens, and a scene is force-cut at max.
-export async function findSceneEnd({ messages, start, minTokens, maxTokens, speaker, askBoundary, flush = false }) {
+export async function findSceneEnd({ messages, start, minTokens, maxTokens, targetTokens, speaker, askBoundary, flush = false }) {
+  const target = Number(targetTokens) || (minTokens + maxTokens) / 2;
   let cum = 0, forcedEnd = -1, i = start;
   for (; i < messages.length; i++) {
     const n = tok(messages[i]);
@@ -81,12 +88,16 @@ export async function findSceneEnd({ messages, start, minTokens, maxTokens, spea
   const text = numberedWindow(messages, start, windowEnd, speaker);
   let proposed = [];
   if (text) proposed = parseBoundaries(await askBoundary(text), start + 1, windowEnd);
+  // Of the proposed breaks that leave a big-enough scene, take the one closest to the target size,
+  // so a model that over-splits cannot push us into many tiny scenes.
+  let best = null;
   for (const num of proposed) {
     const end = num - 1; // message #num starts the next scene
     let t = 0;
     for (let k = start; k < end; k++) t += tok(messages[k]);
-    if (end > start && t >= minTokens) return { end, forced: false };
+    if (end > start && t >= minTokens && (!best || Math.abs(t - target) < best.gap)) best = { end, gap: Math.abs(t - target) };
   }
+  if (best) return { end: best.end, forced: false };
   if (!atEnd) return { end: forcedEnd, forced: true };
   if (flush) return { end: messages.length, forced: false };
   return null;
@@ -164,11 +175,12 @@ export function staleScenes(messages, scenes) {
 export function estimateBackfill(messages, start, opts) {
   let tokens = 0, count = 0;
   for (let i = start; i < messages.length; i++) { const n = tok(messages[i]); if (n) count++; tokens += n; }
-  // Scenes land between "always cut at max size" (fewest) and "cut often" (most); assume about half of max.
+  // Scenes land between "always cut at max size" (fewest) and "cut near the minimum" (most).
+  const target = Number(opts.targetSceneTokens) || (opts.minSceneTokens + opts.maxSceneTokens) / 2;
   const none = tokens < opts.minSceneTokens;
   const scenesLow = none ? 0 : Math.max(1, Math.ceil(tokens / opts.maxSceneTokens));
-  const scenes = none ? 0 : Math.max(scenesLow, Math.round(tokens / (opts.maxSceneTokens * 0.5)));
-  const scenesHigh = none ? 0 : Math.max(scenes, Math.round(tokens / (opts.maxSceneTokens * 0.3)));
+  const scenes = none ? 0 : Math.max(scenesLow, Math.round(tokens / target));
+  const scenesHigh = none ? 0 : Math.max(scenes, Math.round(tokens / (opts.minSceneTokens * 1.5)));
   const promptTokens = estimateTokens(opts.boundaryPrompt || '') + estimateTokens(opts.scenePrompt || '');
   return {
     messages: count, tokens, scenes, scenesLow, scenesHigh, calls: scenes * 2,
@@ -189,7 +201,7 @@ export async function runBackfill({ messages, scenes, opts, speaker, askBoundary
     const start = nextStart(out);
     if (start >= messages.length) break;
     try {
-      const cut = await findSceneEnd({ messages, start, minTokens: opts.minSceneTokens, maxTokens: opts.maxSceneTokens, speaker, askBoundary, flush });
+      const cut = await findSceneEnd({ messages, start, minTokens: opts.minSceneTokens, maxTokens: opts.maxSceneTokens, targetTokens: opts.targetSceneTokens, speaker, askBoundary, flush });
       if (!cut) break;
       const from = start + 1, to = cut.end;
       const input = buildSceneInput(messages, from, to, speaker, out.length ? out[out.length - 1].summary : '');
