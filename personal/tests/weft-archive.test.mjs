@@ -138,4 +138,19 @@ const one = A.newReview(); A.setFlag(one, st('crooked right pinky').key, { del: 
 assert.equal(A.buildArchive(inj, one).entities.find(e => e.name === 'Sam').groups.length, 7);
 const cur = sam.groups.filter(g => g.status === 'current' && !g.hidden).length;
 assert.equal(A.checkable(ia).length, cur >= 3 ? 1 : 0);
+// an edited fact keeps its key and flags; the original stays available to revert to
+{
+  const scs = [{ id: 's1-10', from: 1, to: 10, facts: [{ name: 'Tyler', durability: 'durable', text: 'Tyler is JD\'s cousin' }], relationships: [] }];
+  const rv = A.newReview();
+  const g0 = A.buildArchive(scs, rv).entities[0].groups[0];
+  A.setFlag(rv, g0.key, { pin: 'yes' });
+  A.setFlag(rv, g0.key, { txt: 'Tyler is JD\'s younger half-brother' });
+  const g1 = A.buildArchive(scs, rv).entities[0].groups[0];
+  assert.equal(g1.key, g0.key);
+  assert.equal(g1.text, 'Tyler is JD\'s younger half-brother');
+  assert.equal(g1.orig, 'Tyler is JD\'s cousin');
+  assert.ok(g1.edited && g1.pin === 'yes');
+  A.setFlag(rv, g0.key, { txt: null });
+  assert.equal(A.buildArchive(scs, rv).entities[0].groups[0].text, 'Tyler is JD\'s cousin');
+}
 console.log('weft-archive tests passed');

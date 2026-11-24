@@ -22,7 +22,7 @@ import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.38)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.39)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -902,12 +902,15 @@ function weftFindGroup(key) {
   for (const e of weftArchive(S.chat).entities) { const g = e.groups.find((x) => x.key === key); if (g) return g; }
   return null;
 }
+const weftEditing = new Set();
 function weftFactRow(g) {
   const tag = g.durability === 'durable' ? 'durable' : g.durability === 'temporary' ? 'temporary' : 'untagged';
   return `<div class="wf-row${g.hidden ? ' wf-hidden' : ''}${g.status === 'superseded' ? ' wf-old' : ''}" id="wf-${g.key}">
-    <div class="wf-text">${esc(g.text)}</div>
-    <div class="hint">${tag} · scenes ${weftRefs(g.scenes)}${g.status === 'superseded' ? (g.auto ? ' · older note, a newer one covers it' : ' · replaced by a newer fact') : ''}${g.pin === 'yes' ? ' · 📌 pinned' : ''}</div>
+    ${weftEditing.has(g.key) ? `<textarea id="wf-ed-${g.key}" rows="3" spellcheck="true">${esc(g.text)}</textarea>
+    <div class="row wrap"><button class="btn sm primary" data-action="weft-fact-edit-save" data-k="${g.key}">Save</button><button class="btn sm" data-action="weft-fact-edit-cancel" data-k="${g.key}">Cancel</button>${g.edited ? `<button class="btn sm" data-action="weft-fact-edit-revert" data-k="${g.key}">Back to original</button>` : ''}</div>` : `<div class="wf-text">${esc(g.text)}</div>`}
+    <div class="hint">${g.edited ? '✎ edited · ' : ''}${tag} · scenes ${weftRefs(g.scenes)}${g.status === 'superseded' ? (g.auto ? ' · older note, a newer one covers it' : ' · replaced by a newer fact') : ''}${g.pin === 'yes' ? ' · 📌 pinned' : ''}</div>
     <div class="row wrap">
+      <button class="btn sm" data-action="weft-fact-edit" data-k="${g.key}">✎ Edit</button>
       <button class="btn sm" data-action="weft-fact-dur" data-k="${g.key}">${g.durability === 'durable' ? 'Make temporary' : 'Make durable'}</button>
       <button class="btn sm" data-action="weft-fact-pin" data-k="${g.key}">${g.pin === 'yes' ? 'Unpin' : '📌 Pin'}</button>
       <button class="btn sm" data-action="weft-fact-hide" data-k="${g.key}">${g.hidden ? 'Show' : 'Hide'}</button>
@@ -3612,6 +3615,7 @@ function restoreExportedChatMemory(chat, md) {
       if (v.hide === true) o.hide = true;
       if (v.del === true) o.del = true;
       if (v.st === 'superseded') o.st = 'superseded';
+      if (typeof v.txt === 'string' && v.txt.trim()) o.txt = v.txt.trim().slice(0, 600);
       if (Object.keys(o).length) facts[k] = o;
     }
     const links = (Array.isArray(rv.links) ? rv.links : []).filter((l) => l && ['same', 'conflict', 'superseded'].includes(l.type) && Array.isArray(l.keys) && l.keys.every(okKey) && typeof l.id === 'string')
@@ -5157,6 +5161,15 @@ const actions = {
   },
   'weft-review': () => weftReviewSheet(),
   'weft-fact-dur': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { d: g && g.durability === 'durable' ? 'temporary' : 'durable' })),
+  'weft-fact-edit': (el) => { weftEditing.add(el.dataset.k); weftRefresh(el.dataset.k); document.getElementById('wf-ed-' + el.dataset.k)?.focus(); },
+  'weft-fact-edit-cancel': (el) => { weftEditing.delete(el.dataset.k); weftRefresh(el.dataset.k); },
+  'weft-fact-edit-save': (el) => {
+    const t = (document.getElementById('wf-ed-' + el.dataset.k)?.value || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+    if (!t) return toast('A fact can't be empty. Use Delete to remove it.', 3500);
+    weftEditing.delete(el.dataset.k);
+    return weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { txt: g && t === g.orig ? null : t }));
+  },
+  'weft-fact-edit-revert': (el) => { weftEditing.delete(el.dataset.k); return weftFlag(el, (rv, k) => WA.setFlag(rv, k, { txt: null })); },
   'weft-fact-pin': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { pin: g && g.pin === 'yes' ? null : 'yes' })),
   'weft-fact-hide': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { hide: !(g && g.hidden) })),
   'weft-fact-del': async (el) => { WA.setFlag(weftReview(S.chat), el.dataset.k, { del: true }); await saveChat(S.chat); weftReviewSheet(); },

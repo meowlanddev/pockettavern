@@ -116,7 +116,7 @@ export function buildArchive(scenes, review = {}) {
       const dur = g.durs.filter(d => d === 'durable').length, tmp = g.durs.filter(d => d === 'temporary').length;
       const auto = dur + tmp === 0 ? 'unknown' : dur >= tmp ? 'durable' : 'temporary';
       g.scenes.sort((a, b) => a.from - b.from);
-      return { key: g.key, text: g.text, scenes: g.scenes, durability: o.d || auto, pin: o.pin || null, hidden: !!o.hide, deleted: !!o.del, auto: false,
+      return { key: g.key, text: o.txt || g.text, orig: g.text, edited: !!o.txt, scenes: g.scenes, durability: o.d || auto, pin: o.pin || null, hidden: !!o.hide, deleted: !!o.del, auto: false,
         status: o.st === 'superseded' || supersededBy.has(g.key) ? 'superseded' : 'current', supersededBy: supersededBy.get(g.key) || null };
     }).sort((a, b) => a.scenes[0].from - b.scenes[0].from);
     for (const g of groups) if (g.deleted) deleted.push({ entity: e.name, key: g.key, text: g.text });
