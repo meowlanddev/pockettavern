@@ -1,10 +1,10 @@
 // Service worker: makes the app installable and usable offline.
 // Network-first for app files, so updates show up on the next launch.
-const CACHE = 'pockettavern-combined-ui-preview-v42';
+const CACHE = 'pockettavern-combined-ui-preview-v43';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/card.js', './js/prompt.js', './js/api.js',
-  './js/narrative-db.js', './js/memory-status.js', './js/macros.js', './js/worldinfo.js', './js/regex.js', './js/preset.js', './js/render.js', './js/stscript.js', './js/enhance.js', './js/memory.js', './js/stimport.js', './js/extras.js', './js/instruct.js', './js/theme.js', './js/vault.js', './js/vendor/purify.js',
+  './js/narrative-db.js', './js/memory-status.js', './js/memory-system.js', './js/macros.js', './js/worldinfo.js', './js/regex.js', './js/preset.js', './js/render.js', './js/stscript.js', './js/enhance.js', './js/memory.js', './js/stimport.js', './js/extras.js', './js/instruct.js', './js/theme.js', './js/vault.js', './js/vendor/purify.js',
   './icons/personal-icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 

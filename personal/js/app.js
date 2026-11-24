@@ -15,10 +15,11 @@ import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, norm
 import * as MEM from './memory.js';
 import * as NDB from './narrative-db.js';
 import { memoryStatus } from './memory-status.js';
+import { memorySystemOf, setMemorySystem } from './memory-system.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.26)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.27)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3811,7 +3812,11 @@ function renderSettingsView(open) {
   const extra = extSections();
   const extBody = `
     ${extensionCategory("memory", "🧠 Summarization & Memory", [sm.enabled, mm.enabled, nd.enabled, S.settings.ext.recall.enabled], `
-      ${extensionPanel("summarize", "Summarize", sm.enabled, `
+      <label class="field inline"><span class="label">Memory system<span class="hint">Only one runs at a time. Chats set to “Manual only” still send their saved Narrative Database.</span></span><select data-mem-system>
+        ${[['off', 'Off'], ['summaryception', 'Layered Memory (classic)'], ['database', 'Narrative Database'], ...(sm.enabled ? [['summarize', 'Summarize (legacy)']] : [])].map(([k, v]) => `<option value="${k}" ${memorySystemOf(S.settings.ext) === k ? 'selected' : ''}>${v}</option>`).join('')}
+        <option value="loom" disabled>WEFT (in development)</option>
+      </select></label>
+      ${sm.enabled ? extensionPanel("summarize", "Summarize (legacy)", sm.enabled, `
 
     ${tog('data-ext-sum-toggle', 'enabled', sm.enabled, 'Enabled', 'Keeps a running summary of each chat and adds it to the prompt')}
     <label class="field inline"><span class="label">Update every<span class="hint">messages</span></span><input inputmode="numeric" data-ext-sum="every" value="${sm.every}"></label>
@@ -3823,8 +3828,8 @@ function renderSettingsView(open) {
     <label class="field"><span class="label">Injection template</span><input data-ext-sum="template" value="${esc(sm.template)}"></label>
     <label class="field"><span class="label">Summary prompt</span><textarea data-ext-sum="prompt" rows="5">${esc(sm.prompt)}</textarea></label>
     <p class="hint">Edit or refresh a chat's summary from ✨ → Summary. Your preset can use it anywhere with {{summary}}.</p>
-    
-      `)}
+
+      `) : ''}
       ${extensionPanel("summaryception", "Summaryception (Layered Memory)", mm.enabled, `
 
     ${tog('data-ext-mem-toggle', 'enabled', mm.enabled, 'Enabled', 'Recent chat stays word-for-word; older chat becomes layered memories and is “ghosted” (still visible to you, not sent)')}
@@ -5604,18 +5609,19 @@ document.addEventListener('change', (e) => {
     rerenderSettings();
     return;
   }
+  if (el.dataset.memSystem !== undefined) {
+    setMemorySystem(S.settings.ext, el.value);
+    saveSettings(); rerenderSettings(); return;
+  }
   if (el.dataset.extNdbToggle || el.dataset.extNdbSelect) {
     const key = el.dataset.extNdbToggle || el.dataset.extNdbSelect;
     S.settings.ext.database[key] = el.dataset.extNdbToggle ? el.checked : el.value;
-    if (key === 'enabled' && el.checked) {
-      S.settings.ext.summarize.enabled = false;
-      S.settings.ext.memory.enabled = false;
-    }
+    if (key === 'enabled' && el.checked) setMemorySystem(S.settings.ext, 'database');
     saveSettings(); rerenderSettings(); return;
   }
   if (el.dataset.extMemToggle) {
     S.settings.ext.memory[el.dataset.extMemToggle] = el.checked;
-    if (el.dataset.extMemToggle === 'enabled' && el.checked) S.settings.ext.database.enabled = false;
+    if (el.dataset.extMemToggle === 'enabled' && el.checked) setMemorySystem(S.settings.ext, 'summaryception');
     saveSettings();
     rerenderSettings();
     return;
@@ -5643,7 +5649,7 @@ document.addEventListener('change', (e) => {
   }
   if (el.dataset.extSumToggle) {
     S.settings.ext.summarize[el.dataset.extSumToggle] = el.checked;
-    if (el.dataset.extSumToggle === 'enabled' && el.checked) S.settings.ext.database.enabled = false;
+    if (el.dataset.extSumToggle === 'enabled' && el.checked) setMemorySystem(S.settings.ext, 'summarize');
     saveSettings();
     return;
   }
