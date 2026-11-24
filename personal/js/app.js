@@ -16,10 +16,11 @@ import * as MEM from './memory.js';
 import * as NDB from './narrative-db.js';
 import { memoryStatus } from './memory-status.js';
 import { memorySystemOf, setMemorySystem } from './memory-system.js';
+import * as WEFT from './weft.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.27)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.28)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -45,7 +46,7 @@ function defaultSettings() {
     ui: { enterSends: false, fontSize: 16, allowExternalMedia: false },
     instruct: { template: 'chatml', saved: [] },
     library: { sort: 'recent', favFirst: true, folders: [] },
-    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS }, database: { ...NDB.DEFAULT_DATABASE_SETTINGS }, ...structuredClone(X.DEFAULT_EXT) },
+    ext: { enhance: { ...DEFAULT_ENHANCE_SETTINGS }, summarize: { ...DEFAULT_SUMMARIZE_SETTINGS }, memory: { ...MEM.DEFAULT_MEMORY_SETTINGS }, database: { ...NDB.DEFAULT_DATABASE_SETTINGS }, weft: { ...WEFT.DEFAULT_WEFT_SETTINGS }, ...structuredClone(X.DEFAULT_EXT) },
     appearance: structuredClone(DEFAULT_APPEARANCE),
   };
 }
@@ -778,6 +779,81 @@ function ndbManualHtml(chat, cfg, prog) {
     <p class="hint">Only saving advances the automatic checkpoint. Replacing discards later summaries built on the incorrect record; chat messages are never changed.</p>
     <hr><button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Existing Summary & Checkpoints</button>
   `;
+}
+function weftSheet() {
+  const chat = S.chat;
+  if (!chat) return;
+  const cfg = S.settings.ext.weft;
+  const scenes = chat.weft?.scenes || [];
+  const run = S.weftRun && S.weftRun.chatId === chat.id ? S.weftRun : null;
+  const stale = new Set(WEFT.staleScenes(chat.messages, scenes));
+  const start = WEFT.nextStart(scenes);
+  const est = WEFT.estimateBackfill(chat.messages, start, cfg);
+  const k = (n) => `${Math.max(1, Math.round(n / 1000))}k`;
+  const go = est.scenes
+    ? `${scenes.length ? 'Continue' : 'Build'} scenes (about ${est.scenes} more, ~${est.calls} calls)`
+    : 'Nothing new to build yet';
+  openSheet(`
+    <div class="sheet-title">WEFT scenes <span class="muted small">· preview</span></div>
+    <p class="hint">Scenes are saved with this chat and are not sent to the model yet. Your Narrative Database is untouched. Existing scenes are never rewritten.</p>
+    <div class="mem-stats">
+      <div><b>${scenes.length}</b> scenes</div>
+      <div><b>${start} / ${chat.messages.length}</b> messages covered</div>
+      <div><b>${stale.size}</b> out of date</div>
+    </div>
+    <div id="weft-progress" class="ndb-running-banner" ${run ? '' : 'hidden'}>${esc(run?.message || '')}</div>
+    <div class="row wrap">
+      ${run ? '<button class="btn" data-action="weft-stop">Stop after current call</button>' : `<button class="btn primary" data-action="weft-build" ${est.scenes ? '' : 'disabled'}>${go}</button>`}
+      <button class="btn danger" data-action="weft-clear" ${run || !scenes.length ? 'disabled' : ''}>Delete scenes</button>
+    </div>
+    ${est.scenes ? `<p class="hint">Estimate for the remaining ${est.messages} messages (~${k(est.tokens)} tokens): roughly ${est.scenesLow}-${est.scenesHigh} scenes, ~${est.calls} model calls, ~${k(est.inputTokens)} tokens in and ~${k(est.outputTokens)} out${est.minutes ? `. At one call every ${cfg.callIntervalSec}s that is about ${est.minutes} minutes` : ''}. It is a rough guess; the real count depends on where the model finds scene breaks. Progress is saved after every scene, so you can stop and resume. Don't chat while it runs: your replies share the same rate limit.</p>` : ''}
+    ${stale.size ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Messages inside some scenes were edited after the record was written. Those scenes are flagged below; stage 1 does not rebuild them.</p>' : ''}
+    ${scenes.map((sc) => `<details class="section"><summary>Messages ${sc.from}–${sc.to} · ~${k(sc.tokens)} tokens${sc.edited ? ' · ✎ edited' : ''}${stale.has(sc.id) ? ' · ⚠ out of date' : ''}</summary><div class="sec-body">
+      <label class="field"><span class="label">Scene record</span><textarea id="weft-sum-${sc.id}" rows="8" spellcheck="false">${esc(sc.summary)}</textarea></label>
+      <label class="field"><span class="label">Facts<span class="hint">one per line: Name | durable or temporary | fact</span></span><textarea id="weft-facts-${sc.id}" rows="4" spellcheck="false">${esc(WEFT.formatFactLines(sc.facts))}</textarea></label>
+      <label class="field"><span class="label">Relationships<span class="hint">one per line: A &amp; B | what changed</span></span><textarea id="weft-rels-${sc.id}" rows="3" spellcheck="false">${esc(WEFT.formatRelationshipLines(sc.relationships))}</textarea></label>
+      ${sc.names?.length ? `<p class="hint">Names: ${esc(sc.names.join(', '))}</p>` : ''}
+      <button class="btn sm" data-action="weft-edit-save" data-id="${sc.id}">Save changes</button>
+    </div></details>`).join('')}
+    ${scenes.length ? '<p class="hint">Edited scenes are marked and never regenerated. Fix any wrong detail here before scenes are ever sent to the model.</p>' : ''}
+  `, 'tall');
+}
+async function runWeft() {
+  const chat = S.chat;
+  if (!chat || S.weftRun) return;
+  const cfg = S.settings.ext.weft;
+  chat.weft = chat.weft || { version: 1, scenes: [] };
+  const run = S.weftRun = { chatId: chat.id, stop: false, made: 0, message: 'Starting…' };
+  const show = (msg) => { run.message = msg; const el = $('#weft-progress'); if (el) { el.hidden = false; el.textContent = msg; } };
+  weftSheet();
+  let failure = null;
+  try {
+    show(`Looking for the next scene break… (${chat.weft.scenes.length} saved)`);
+    const sleep = (ms) => new Promise((res) => { const t0 = Date.now(); const iv = setInterval(() => { if (run.stop || Date.now() - t0 >= ms) { clearInterval(iv); res(); } }, 400); });
+    const paced = WEFT.makePacer({
+      intervalMs: Math.max(0, Number(cfg.callIntervalSec) || 0) * 1000, sleep, shouldStop: () => run.stop,
+      onWait: (ms, why) => show(why === 'rate' ? `Rate limit hit; retrying in ${Math.round(ms / 1000)}s… (${chat.weft.scenes.length} saved)` : `Waiting ${Math.round(ms / 1000)}s for your rate limit… (${chat.weft.scenes.length} saved)`),
+    });
+    await WEFT.runBackfill({
+      messages: chat.messages, scenes: chat.weft.scenes, opts: cfg, speaker: memNameOf,
+      askBoundary: (text) => paced(() => memCall(cfg.boundaryPrompt, text, 300, cfg.model)),
+      summarize: (input) => paced(() => memCall(cfg.scenePrompt, input, Math.max(300, Number(cfg.maxOutputTokens) || 1100), cfg.model)),
+      shouldStop: () => run.stop,
+      onScene: async (scene, all) => {
+        chat.weft.scenes = all; chat.weft.updatedAt = Date.now();
+        await saveChat(chat);
+        run.made++;
+        show(`Saved scene for messages ${scene.from}–${scene.to} (${all.length} total, ${run.made} this run)…`);
+      },
+    });
+  } catch (e) {
+    failure = e;
+  } finally {
+    S.weftRun = null;
+  }
+  if (S.chat === chat && $('#weft-progress')) weftSheet(); // only if the WEFT sheet is still the one open
+  if (failure) toast(`WEFT stopped: ${failure.message || failure}. Saved scenes are kept; tap Continue to resume.`, 9000);
+  else toast(run.stop ? 'WEFT stopped. Tap Continue to resume.' : `WEFT: ${run.made} new scene${run.made === 1 ? '' : 's'}.`, 4000);
 }
 function databaseSheet() {
   const chat = S.chat;
@@ -3261,6 +3337,7 @@ function exportChat(includeMemory = false) {
       ...(chat.narrativeDb?.text && chat.narrativeDbManualOnly ? { narrativeDbManualOnly: true } : {}),
       ...(chat.summary?.text ? { summary: structuredClone(chat.summary) } : {}),
       ...(chat.authorsNote?.text ? { authorsNote: structuredClone(chat.authorsNote) } : {}),
+      ...(chat.weft?.scenes?.length ? { weft: structuredClone(chat.weft) } : {}),
     };
   }
   const lines = [JSON.stringify({ user_name: persona.name, character_name: S.char.name, create_date: new Date(S.chat.createdAt).toISOString(), chat_metadata: metadata })];
@@ -3327,7 +3404,20 @@ function restoreExportedChatMemory(chat, md) {
       role: ['system','assistant','user'].includes(bundle.authorsNote.role) ? bundle.authorsNote.role : 'system',
     };
   }
-  return !!(chat.narrativeDb || chat.summary);
+  const wf = bundle.weft;
+  if (wf && Array.isArray(wf.scenes) && wf.scenes.length) {
+    // Scenes are tied to exact message ranges, so keep only well-formed ones that fit this chat.
+    const ok = wf.scenes.filter((x) => x && Number.isInteger(x.from) && Number.isInteger(x.to) && x.from >= 1 && x.to >= x.from
+      && x.to <= chat.messages.length && typeof x.summary === 'string' && x.summary.trim());
+    if (ok.length) chat.weft = { version: 1, scenes: ok.map((x) => ({
+      id: String(x.id || `s${x.from}-${x.to}`), from: x.from, to: x.to, tokens: Number(x.tokens) || 0,
+      fingerprint: WEFT.rangeFingerprint(chat.messages, x.from, x.to), summary: x.summary,
+      names: Array.isArray(x.names) ? x.names.map(String) : [],
+      facts: Array.isArray(x.facts) ? x.facts.filter((f) => f && typeof f.text === 'string').map((f) => ({ name: String(f.name || ''), durability: ['durable', 'temporary'].includes(f.durability) ? f.durability : 'unknown', text: f.text })) : [],
+      relationships: Array.isArray(x.relationships) ? x.relationships.filter((r) => r && typeof r.text === 'string').map((r) => ({ who: String(r.who || ''), text: r.text })) : [],
+      edited: x.edited === true, at: Number(x.at) || Date.now() })), updatedAt: Date.now() };
+  }
+  return !!(chat.narrativeDb || chat.summary || chat.weft);
 }
 
 async function importChat() {
@@ -3877,6 +3967,20 @@ function renderSettingsView(open) {
     <div id="ndb-settings-progress" class="ndb-running-banner" hidden></div>
     <button class="btn ndb-manage-btn" data-action="qa-database">Manage Narrative Database / Rebuild from Chat History</button>
     <p class="hint">Choose only one memory mode at a time. Switching modes retains each mode's stored data. Narrative Database does not modify the original messages.</p>
+      `)}
+      ${extensionPanel("weft", "WEFT scenes (preview)", false, `
+    <p class="hint">Splits a chat into scenes and stores one short, permanent record per scene. In this preview the records are only built and listed; they are not sent to the model yet, and your memory system above is unaffected.</p>
+    <button class="btn" data-action="weft-open">Open WEFT scenes for this chat</button>
+    <label class="field"><span class="label">Scene model (optional, blank = current model)</span><input data-ext-weft="model" value="${esc(S.settings.ext.weft.model)}" autocapitalize="off"></label>
+    <label class="field inline"><span class="label">Min scene size<span class="hint">estimated tokens</span></span><input inputmode="numeric" data-ext-weft="minSceneTokens" value="${S.settings.ext.weft.minSceneTokens}"></label>
+    <label class="field inline"><span class="label">Max scene size<span class="hint">estimated tokens; longer scenes are cut</span></span><input inputmode="numeric" data-ext-weft="maxSceneTokens" value="${S.settings.ext.weft.maxSceneTokens}"></label>
+    <label class="field inline"><span class="label">Scene record length<span class="hint">max output tokens</span></span><input inputmode="numeric" data-ext-weft="maxOutputTokens" value="${S.settings.ext.weft.maxOutputTokens}"></label>
+    <label class="field inline"><span class="label">Seconds between calls<span class="hint">21 fits a 3-per-minute limit; 0 = no pacing</span></span><input inputmode="numeric" data-ext-weft="callIntervalSec" value="${S.settings.ext.weft.callIntervalSec}"></label>
+    <details class="section"><summary>WEFT prompts</summary><div class="sec-body">
+      <label class="field"><span class="label">Scene boundary check</span><textarea data-ext-weft="boundaryPrompt" rows="7">${esc(S.settings.ext.weft.boundaryPrompt)}</textarea></label>
+      <label class="field"><span class="label">Scene record</span><textarea data-ext-weft="scenePrompt" rows="12">${esc(S.settings.ext.weft.scenePrompt)}</textarea></label>
+      <button class="btn sm" data-action="weft-reset-prompts">Reset prompts</button>
+    </div></details>
       `)}
     `)}
     ${extensionCategory("writing", "✍️ Writing & Language", [en.enabled, S.settings.ext.translate.enabled], `
@@ -4816,6 +4920,27 @@ const actions = {
   'qa-summary': summarySheet,
   'qa-memory': memorySheet,
   'qa-database': openDatabaseManager,
+  'weft-open': () => { if (!S.chat) return toast('Open a chat first; scenes are stored per chat.', 5000); weftSheet(); },
+  'weft-build': () => runWeft(),
+  'weft-stop': () => { if (S.weftRun) { S.weftRun.stop = true; toast('Stopping after the current call…'); } },
+  'weft-edit-save': async (el) => {
+    if (S.weftRun) return toast('Stop the build before editing scenes.');
+    const chat = S.chat, id = el.dataset.id;
+    const i = (chat.weft?.scenes || []).findIndex((x) => x.id === id);
+    if (i < 0) return;
+    try {
+      chat.weft.scenes[i] = WEFT.applyEdit(chat.weft.scenes[i], {
+        summary: $('#weft-sum-' + id)?.value, factsText: $('#weft-facts-' + id)?.value, relationshipsText: $('#weft-rels-' + id)?.value });
+    } catch (e) { return toast(e.message, 4000); }
+    await saveChat(chat);
+    toast('Scene saved.');
+  },
+  'weft-clear': async () => {
+    if (S.weftRun) return toast('Stop the build first.');
+    if (!confirm('Delete all WEFT scenes for this chat? Messages and other memory systems are untouched.')) return;
+    delete S.chat.weft; await saveChat(S.chat); weftSheet();
+  },
+  'weft-reset-prompts': () => { Object.assign(S.settings.ext.weft, { boundaryPrompt: WEFT.BOUNDARY_PROMPT, scenePrompt: WEFT.SCENE_PROMPT }); saveSettings(); rerenderSettings(); },
   'ndb-select-chat': async (el) => {
     const chat = await db.get('chats', el.dataset.id);
     if (!chat) return toast('That chat could not be found.', 5000);
@@ -5517,6 +5642,10 @@ document.addEventListener('input', (e) => {
     const k = el.dataset.extNdb;
     S.settings.ext.database[k] = ['batchTokens','recentTokens','maxOutputTokens','depth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.database[k]) : el.value;
     saveSettings();
+  } else if (el.dataset.extWeft) {
+    const k = el.dataset.extWeft;
+    S.settings.ext.weft[k] = ['minSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
+    saveSettings();
   } else if (el.dataset.extMem) {
     const k = el.dataset.extMem;
     const numeric = ['verbatim', 'queued', 'memoryBudget', 'depth'].includes(k);
@@ -5827,6 +5956,7 @@ async function boot() {
       summarize: { ...def.ext.summarize, ...((settings.ext || {}).summarize || {}) },
       memory: { ...def.ext.memory, ...((settings.ext || {}).memory || {}) },
       database: { ...def.ext.database, ...((settings.ext || {}).database || {}) },
+      weft: { ...def.ext.weft, ...((settings.ext || {}).weft || {}) },
       ...Object.fromEntries(Object.keys(X.DEFAULT_EXT).map((k) => [k, { ...def.ext[k], ...((settings.ext || {})[k] || {}) }])),
     },
     appearance: { ...def.appearance, ...(settings.appearance || {}) },
