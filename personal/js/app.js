@@ -17,10 +17,11 @@ import * as NDB from './narrative-db.js';
 import { memoryStatus } from './memory-status.js';
 import { memorySystemOf, setMemorySystem } from './memory-system.js';
 import * as WEFT from './weft.js';
+import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.34)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.35)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -808,6 +809,7 @@ function weftSheet() {
     <div id="weft-progress" class="ndb-running-banner" ${run ? '' : 'hidden'}>${esc(run?.message || '')}</div>
     <div class="row wrap">
       ${run ? '<button class="btn" data-action="weft-stop">Stop after current call</button>' : `<button class="btn primary" data-action="weft-build" ${est.scenes ? '' : 'disabled'}>${go}</button>`}
+      <button class="btn" data-action="weft-review" ${scenes.length ? '' : 'disabled'}>Archive &amp; review</button>
       <button class="btn danger" data-action="weft-clear" ${run || !scenes.length ? 'disabled' : ''}>Delete scenes</button>
     </div>
     ${est.scenes ? `<p class="hint">Estimate for the remaining ${est.messages} messages (~${k(est.tokens)} tokens): roughly ${est.scenesLow}-${est.scenesHigh} scenes, ~${est.calls} model calls, ~${k(est.inputTokens)} tokens in and ~${k(est.outputTokens)} out${est.minutes ? `. At one call every ${cfg.callIntervalSec}s that is about ${est.minutes} minutes` : ''}. It is a rough guess; the real count depends on where the model finds scene breaks. Progress is saved after every scene, so you can stop and resume. Don't chat while it runs: your replies share the same rate limit.</p>` : ''}
@@ -824,7 +826,7 @@ function weftSheet() {
 }
 async function runWeft() {
   const chat = S.chat;
-  if (!chat || S.weftRun) return;
+  if (!chat || S.weftRun || S.weftCheck) return;
   const cfg = S.settings.ext.weft;
   chat.weft = chat.weft || { version: 1, scenes: [] };
   const run = S.weftRun = { chatId: chat.id, stop: false, made: 0, message: 'Starting…' };
@@ -858,6 +860,110 @@ async function runWeft() {
   if (S.chat === chat && $('#weft-progress')) weftSheet(); // only if the WEFT sheet is still the one open
   if (failure) toast(`WEFT stopped: ${failure.message || failure}. Saved scenes are kept; tap Continue to resume.`, 9000);
   else toast(run.stop ? 'WEFT stopped. Tap Continue to resume.' : `WEFT: ${run.made} new scene${run.made === 1 ? '' : 's'}.`, 4000);
+}
+
+// ---- WEFT archive & review (stage 2a): nothing here reaches the prompt yet.
+const weftReview = (chat) => { if (!chat.weft.review) chat.weft.review = WA.newReview(); return chat.weft.review; };
+const weftArchive = (chat) => WA.buildArchive(chat.weft?.scenes || [], weftReview(chat));
+const weftRefs = (scenes) => scenes.map((s) => s.from).join(', ');
+function weftFindGroup(key) {
+  for (const e of weftArchive(S.chat).entities) { const g = e.groups.find((x) => x.key === key); if (g) return g; }
+  return null;
+}
+function weftFactRow(g) {
+  const tag = g.durability === 'durable' ? 'durable' : g.durability === 'temporary' ? 'temporary' : 'untagged';
+  return `<div class="wf-row${g.hidden ? ' wf-hidden' : ''}${g.status === 'superseded' ? ' wf-old' : ''}" id="wf-${g.key}">
+    <div class="wf-text">${esc(g.text)}</div>
+    <div class="hint">${tag} · scenes ${weftRefs(g.scenes)}${g.status === 'superseded' ? ' · replaced by a newer fact' : ''}${g.pin === 'yes' ? ' · 📌 pinned' : ''}</div>
+    <div class="row wrap">
+      <button class="btn sm" data-action="weft-fact-dur" data-k="${g.key}">${g.durability === 'durable' ? 'Make temporary' : 'Make durable'}</button>
+      <button class="btn sm" data-action="weft-fact-pin" data-k="${g.key}">${g.pin === 'yes' ? 'Unpin' : '📌 Pin'}</button>
+      <button class="btn sm" data-action="weft-fact-hide" data-k="${g.key}">${g.hidden ? 'Show' : 'Hide'}</button>
+    </div></div>`;
+}
+function weftNeedsHtml(arch) {
+  const c = arch.conflicts, s = arch.suggestions;
+  if (!c.length && !s.length) return '<p class="hint">Nothing needs review right now. “Check consistency” below looks for conflicts and suggests facts worth pinning.</p>';
+  return `${c.length ? `<details class="section" open><summary>⚠ Conflicts to decide (${c.length})</summary><div class="sec-body">${c.map((x) => `<div class="wf-conf">
+      <p class="hint">${esc(x.reason || 'These two facts may contradict each other.')}</p>
+      ${x.items.map((it) => `<div class="wf-row"><div class="wf-text">${esc(it.entity)}: ${esc(it.text)}</div><div class="hint">scenes ${weftRefs(it.scenes)}</div>
+        <button class="btn sm" data-action="weft-link-keep" data-link="${esc(x.id)}" data-keep="${it.key}">This one is right</button></div>`).join('')}
+      <button class="btn sm" data-action="weft-link-dismiss" data-link="${esc(x.id)}">Both are fine</button></div>`).join('')}</div></details>` : ''}
+    ${s.length ? `<details class="section"><summary>📌 Suggested pins (${s.length})</summary><div class="sec-body">${s.map((x) => `<div class="wf-row"><div class="wf-text">${esc(x.entity)}: ${esc(x.text)}</div>
+      <div class="hint">${x.byModel ? 'model suggestion · ' : 'repeated in several scenes · '}scenes ${weftRefs(x.scenes)}</div>
+      <div class="row wrap"><button class="btn sm primary" data-action="weft-fact-pin" data-k="${x.key}">Pin</button><button class="btn sm" data-action="weft-pin-no" data-k="${x.key}">No thanks</button></div></div>`).join('')}</div></details>` : ''}`;
+}
+function weftEntityHtml(e) {
+  const pins = e.groups.filter((g) => g.pin === 'yes').length;
+  return `<details class="section"><summary>${esc(e.name)} · ${e.groups.length} fact${e.groups.length === 1 ? '' : 's'}${pins ? ` · 📌 ${pins}` : ''}${e.aliases.length ? ` · also ${esc(e.aliases.slice(0, 3).join(', '))}` : ''}</summary><div class="sec-body">
+    ${e.groups.map(weftFactRow).join('') || '<p class="hint">No stand-alone facts, only relationships.</p>'}
+    ${e.relationships.map((r) => `<details class="section"><summary>With ${esc(r.with)} · ${r.items.length} note${r.items.length === 1 ? '' : 's'}</summary><div class="sec-body">${r.items.map((it) => `<p class="hint">Scenes ${it.from}–${it.to}: ${esc(it.text)}</p>`).join('')}</div></details>`).join('')}
+  </div></details>`;
+}
+function weftReviewSheet() {
+  const chat = S.chat;
+  if (!chat?.weft?.scenes?.length) return toast('Build WEFT scenes for this chat first.', 4000);
+  const cfg = S.settings.ext.weft;
+  const arch = weftArchive(chat);
+  const checkN = WA.checkable(arch).length;
+  const run = S.weftCheck && S.weftCheck.chatId === chat.id ? S.weftCheck : null;
+  const mins = Math.ceil(checkN * (Number(cfg.callIntervalSec) || 0) / 60);
+  openSheet(`
+    <div class="sheet-title">WEFT archive <span class="muted small">· review</span></div>
+    <p class="hint">Built from the facts in your scene records and grouped by person, place or thing. Nothing here is sent to the model yet. Fix tags, pin what must never be forgotten, hide what doesn't matter. Every fact points back to its scenes.</p>
+    <div id="wf-needs">${weftNeedsHtml(arch)}</div>
+    <div id="wf-progress" class="ndb-running-banner" ${run ? '' : 'hidden'}>${esc(run?.message || '')}</div>
+    <div class="row wrap">
+      ${run ? '<button class="btn" data-action="weft-check-stop">Stop after current call</button>' : `<button class="btn primary" data-action="weft-check" ${checkN && !S.weftRun ? '' : 'disabled'}>Check consistency (${checkN} calls${mins ? `, ~${mins} min` : ''})</button>`}
+    </div>
+    <p class="hint">The model compares each person's facts and replies with numbers only: which say the same thing, which conflict, which replaced an older one, and which are worth pinning. It never rewrites a fact. Good to run before bed; progress is saved after every call.</p>
+    ${arch.entities.map(weftEntityHtml).join('')}
+  `, 'tall');
+}
+function weftRefresh(key) {
+  const chat = S.chat;
+  const arch = weftArchive(chat);
+  const needs = $('#wf-needs');
+  if (needs) needs.innerHTML = weftNeedsHtml(arch);
+  if (!key) return;
+  const row = document.getElementById('wf-' + key);
+  const g = weftFindGroup(key);
+  if (row && g) row.outerHTML = weftFactRow(g);
+}
+async function weftFlag(el, fn) {
+  const chat = S.chat;
+  if (!chat?.weft) return;
+  fn(weftReview(chat), el.dataset.k, weftFindGroup(el.dataset.k));
+  await saveChat(chat);
+  weftRefresh(el.dataset.k);
+}
+async function runWeftCheck() {
+  const chat = S.chat;
+  if (!chat?.weft?.scenes?.length || S.weftCheck || S.weftRun) return;
+  const cfg = S.settings.ext.weft;
+  const rv = weftReview(chat);
+  const arch = weftArchive(chat);
+  const run = S.weftCheck = { chatId: chat.id, stop: false, message: 'Starting…' };
+  const show = (msg) => { run.message = msg; const el = $('#wf-progress'); if (el) { el.hidden = false; el.textContent = msg; } };
+  weftReviewSheet();
+  const total = WA.checkable(arch).length;
+  let failure = null;
+  try {
+    const sleep = (ms) => new Promise((res) => { const t0 = Date.now(); const iv = setInterval(() => { if (run.stop || Date.now() - t0 >= ms) { clearInterval(iv); res(); } }, 400); });
+    const paced = WEFT.makePacer({
+      intervalMs: Math.max(0, Number(cfg.callIntervalSec) || 0) * 1000, sleep, shouldStop: () => run.stop,
+      onWait: (ms, why) => show(why === 'rate' ? `Rate limit hit; retrying in ${Math.round(ms / 1000)}s…` : `Waiting ${Math.round(ms / 1000)}s for your rate limit…`),
+    });
+    show(`Checking facts… (0/${total})`);
+    await WA.runConsistency({
+      archive: arch, shouldStop: () => run.stop,
+      askModel: (system, user) => paced(() => memCall(system, user, 1200, cfg.model)),
+      onLinks: async (links, e, n) => { WA.applyCheckResults(rv, links); await saveChat(chat); show(`Checked ${e.name} (${n}/${total})…`); },
+    });
+  } catch (e) { failure = e; } finally { S.weftCheck = null; }
+  if (S.chat === chat && $('#wf-progress')) weftReviewSheet();
+  if (failure) toast(`Check stopped: ${failure.message || failure}. Results so far are saved; run it again to continue.`, 9000);
+  else toast(run.stop ? 'Check stopped.' : 'Consistency check finished.', 3500);
 }
 function databaseSheet() {
   const chat = S.chat;
@@ -3422,6 +3528,22 @@ function restoreExportedChatMemory(chat, md) {
       relationships: Array.isArray(x.relationships) ? x.relationships.filter((r) => r && typeof r.text === 'string').map((r) => ({ who: String(r.who || ''), text: r.text })) : [],
       edited: x.edited === true, at: Number(x.at) || Date.now() })), updatedAt: Date.now() };
   }
+  const rv = bundle.weft?.review;
+  if (chat.weft && rv && typeof rv === 'object') {
+    const okKey = (k) => typeof k === 'string' && k.length < 40;
+    const facts = {};
+    for (const [k, v] of Object.entries(rv.facts || {})) if (okKey(k) && v && typeof v === 'object') {
+      const o = {};
+      if (v.d === 'durable' || v.d === 'temporary') o.d = v.d;
+      if (v.pin === 'yes' || v.pin === 'no') o.pin = v.pin;
+      if (v.hide === true) o.hide = true;
+      if (v.st === 'superseded') o.st = 'superseded';
+      if (Object.keys(o).length) facts[k] = o;
+    }
+    const links = (Array.isArray(rv.links) ? rv.links : []).filter((l) => l && ['same', 'conflict', 'superseded'].includes(l.type) && Array.isArray(l.keys) && l.keys.every(okKey) && typeof l.id === 'string')
+      .map((l) => ({ id: l.id, type: l.type, keys: l.keys.slice(0, 2), reason: String(l.reason || ''), at: Number(l.at) || Date.now(), ...(l.dismissed ? { dismissed: true } : {}), ...(l.resolved ? { resolved: true } : {}) }));
+    chat.weft.review = { facts, links, proposals: (Array.isArray(rv.proposals) ? rv.proposals : []).filter(okKey) };
+  }
   return !!(chat.narrativeDb || chat.summary || chat.weft);
 }
 
@@ -4941,6 +5063,15 @@ const actions = {
     await saveChat(chat);
     toast('Scene saved.');
   },
+  'weft-review': () => weftReviewSheet(),
+  'weft-fact-dur': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { d: g && g.durability === 'durable' ? 'temporary' : 'durable' })),
+  'weft-fact-pin': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { pin: g && g.pin === 'yes' ? null : 'yes' })),
+  'weft-fact-hide': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { hide: !(g && g.hidden) })),
+  'weft-pin-no': (el) => weftFlag(el, (rv, k) => WA.setFlag(rv, k, { pin: 'no' })),
+  'weft-link-keep': async (el) => { WA.resolveConflict(weftReview(S.chat), el.dataset.link, el.dataset.keep); await saveChat(S.chat); weftReviewSheet(); },
+  'weft-link-dismiss': async (el) => { WA.dismissLink(weftReview(S.chat), el.dataset.link); await saveChat(S.chat); weftReviewSheet(); },
+  'weft-check': () => runWeftCheck(),
+  'weft-check-stop': () => { if (S.weftCheck) { S.weftCheck.stop = true; toast('Stopping after the current call…'); } },
   'weft-clear': async () => {
     if (S.weftRun) return toast('Stop the build first.');
     if (!confirm('Delete all WEFT scenes for this chat? Messages and other memory systems are untouched.')) return;

@@ -675,3 +675,11 @@ button.pt-install-message { border: 0; background: transparent; cursor: pointer;
 .pt-home-results { display: flex; flex-direction: column; gap: .35rem; margin: -.35rem 0 1.1rem; }
 .pt-home-result { display: block; width: 100%; padding: .7rem .9rem; border: 1px solid var(--border, rgba(150,150,160,.25)); border-radius: 10px; background: var(--surface, rgba(120,120,140,.07)); color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .pt-home-result:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+/* WEFT archive & review */
+.wf-row { padding: 8px 0; border-top: 1px solid rgba(128,128,128,.25); }
+.wf-text { font-size: .9rem; line-height: 1.35; }
+.wf-hidden { opacity: .4; }
+.wf-hidden .wf-text { text-decoration: line-through; }
+.wf-old { opacity: .6; }
+.wf-conf { border: 1px solid rgba(128,128,128,.35); border-radius: 12px; padding: 4px 10px 10px; margin: 8px 0; }
