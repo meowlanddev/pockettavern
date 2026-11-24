@@ -21,7 +21,7 @@ import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.35)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.36)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -863,6 +863,9 @@ async function runWeft() {
 }
 
 // ---- WEFT archive & review (stage 2a): nothing here reaches the prompt yet.
+const weftOpen = new Set(['conf']); // which review sections the user has open; survives re-rendering
+document.addEventListener('toggle', (ev) => { const d = ev.target; if (d && d.dataset && d.dataset.wf) { if (d.open) weftOpen.add(d.dataset.wf); else weftOpen.delete(d.dataset.wf); } }, true);
+const wfOpen = (id) => (weftOpen.has(id) ? ' open' : '');
 const weftReview = (chat) => { if (!chat.weft.review) chat.weft.review = WA.newReview(); return chat.weft.review; };
 const weftArchive = (chat) => WA.buildArchive(chat.weft?.scenes || [], weftReview(chat));
 const weftRefs = (scenes) => scenes.map((s) => s.from).join(', ');
@@ -874,29 +877,35 @@ function weftFactRow(g) {
   const tag = g.durability === 'durable' ? 'durable' : g.durability === 'temporary' ? 'temporary' : 'untagged';
   return `<div class="wf-row${g.hidden ? ' wf-hidden' : ''}${g.status === 'superseded' ? ' wf-old' : ''}" id="wf-${g.key}">
     <div class="wf-text">${esc(g.text)}</div>
-    <div class="hint">${tag} · scenes ${weftRefs(g.scenes)}${g.status === 'superseded' ? ' · replaced by a newer fact' : ''}${g.pin === 'yes' ? ' · 📌 pinned' : ''}</div>
+    <div class="hint">${tag} · scenes ${weftRefs(g.scenes)}${g.status === 'superseded' ? (g.auto ? ' · older note, a newer one covers it' : ' · replaced by a newer fact') : ''}${g.pin === 'yes' ? ' · 📌 pinned' : ''}</div>
     <div class="row wrap">
       <button class="btn sm" data-action="weft-fact-dur" data-k="${g.key}">${g.durability === 'durable' ? 'Make temporary' : 'Make durable'}</button>
       <button class="btn sm" data-action="weft-fact-pin" data-k="${g.key}">${g.pin === 'yes' ? 'Unpin' : '📌 Pin'}</button>
       <button class="btn sm" data-action="weft-fact-hide" data-k="${g.key}">${g.hidden ? 'Show' : 'Hide'}</button>
+      <button class="btn sm danger" data-action="weft-fact-del" data-k="${g.key}">Delete</button>
     </div></div>`;
 }
 function weftNeedsHtml(arch) {
   const c = arch.conflicts, s = arch.suggestions;
   if (!c.length && !s.length) return '<p class="hint">Nothing needs review right now. “Check consistency” below looks for conflicts and suggests facts worth pinning.</p>';
-  return `${c.length ? `<details class="section" open><summary>⚠ Conflicts to decide (${c.length})</summary><div class="sec-body">${c.map((x) => `<div class="wf-conf">
+  return `${c.length ? `<details class="section" data-wf="conf"${wfOpen('conf')}><summary>⚠ Conflicts to decide (${c.length})</summary><div class="sec-body">${c.map((x) => `<div class="wf-conf">
       <p class="hint">${esc(x.reason || 'These two facts may contradict each other.')}</p>
       ${x.items.map((it) => `<div class="wf-row"><div class="wf-text">${esc(it.entity)}: ${esc(it.text)}</div><div class="hint">scenes ${weftRefs(it.scenes)}</div>
         <button class="btn sm" data-action="weft-link-keep" data-link="${esc(x.id)}" data-keep="${it.key}">This one is right</button></div>`).join('')}
       <button class="btn sm" data-action="weft-link-dismiss" data-link="${esc(x.id)}">Both are fine</button></div>`).join('')}</div></details>` : ''}
-    ${s.length ? `<details class="section"><summary>📌 Suggested pins (${s.length})</summary><div class="sec-body">${s.map((x) => `<div class="wf-row"><div class="wf-text">${esc(x.entity)}: ${esc(x.text)}</div>
+    ${s.length ? `<details class="section" data-wf="pins"${wfOpen('pins')}><summary>📌 Suggested pins (${s.length})</summary><div class="sec-body">${s.map((x) => `<div class="wf-row"><div class="wf-text">${esc(x.entity)}: ${esc(x.text)}</div>
       <div class="hint">${x.byModel ? 'model suggestion · ' : 'repeated in several scenes · '}scenes ${weftRefs(x.scenes)}</div>
       <div class="row wrap"><button class="btn sm primary" data-action="weft-fact-pin" data-k="${x.key}">Pin</button><button class="btn sm" data-action="weft-pin-no" data-k="${x.key}">No thanks</button></div></div>`).join('')}</div></details>` : ''}`;
 }
 function weftEntityHtml(e) {
   const pins = e.groups.filter((g) => g.pin === 'yes').length;
-  return `<details class="section"><summary>${esc(e.name)} · ${e.groups.length} fact${e.groups.length === 1 ? '' : 's'}${pins ? ` · 📌 ${pins}` : ''}${e.aliases.length ? ` · also ${esc(e.aliases.slice(0, 3).join(', '))}` : ''}</summary><div class="sec-body">
-    ${e.groups.map(weftFactRow).join('') || '<p class="hint">No stand-alone facts, only relationships.</p>'}
+  const cur = e.groups.filter((g) => g.status !== 'superseded');
+  const old = e.groups.filter((g) => g.status === 'superseded');
+  return `<details class="section" data-wf="e:${e.id}"${wfOpen('e:' + e.id)}><summary>${esc(e.name)} · ${e.groups.length} fact${e.groups.length === 1 ? '' : 's'}${pins ? ` · 📌 ${pins}` : ''}${e.aliases.length ? ` · also ${esc(e.aliases.slice(0, 3).join(', '))}` : ''}</summary><div class="sec-body">
+    ${cur.map(weftFactRow).join('') || '<p class="hint">No stand-alone facts, only relationships.</p>'}
+    ${old.length ? `<details class="section" data-wf="old:${e.id}"${wfOpen('old:' + e.id)}><summary>Older notes (${old.length})</summary><div class="sec-body">
+      <button class="btn sm danger" data-action="weft-del-older" data-e="${e.id}">Delete all ${old.length} older notes</button>
+      ${old.map(weftFactRow).join('')}</div></details>` : ''}
     ${e.relationships.map((r) => `<details class="section"><summary>With ${esc(r.with)} · ${r.items.length} note${r.items.length === 1 ? '' : 's'}</summary><div class="sec-body">${r.items.map((it) => `<p class="hint">Scenes ${it.from}–${it.to}: ${esc(it.text)}</p>`).join('')}</div></details>`).join('')}
   </div></details>`;
 }
@@ -908,6 +917,8 @@ function weftReviewSheet() {
   const checkN = WA.checkable(arch).length;
   const run = S.weftCheck && S.weftCheck.chatId === chat.id ? S.weftCheck : null;
   const mins = Math.ceil(checkN * (Number(cfg.callIntervalSec) || 0) / 60);
+  const tops = {}; // keep the scroll position when the sheet is re-rendered after an action
+  if ($('#wf-needs')) for (const sel of ['.sheet-body', '.sheet']) { const el = $(sel); if (el) tops[sel] = el.scrollTop; }
   openSheet(`
     <div class="sheet-title">WEFT archive <span class="muted small">· review</span></div>
     <p class="hint">Built from the facts in your scene records and grouped by person, place or thing. Nothing here is sent to the model yet. Fix tags, pin what must never be forgotten, hide what doesn't matter. Every fact points back to its scenes.</p>
@@ -918,7 +929,10 @@ function weftReviewSheet() {
     </div>
     <p class="hint">The model compares each person's facts and replies with numbers only: which say the same thing, which conflict, which replaced an older one, and which are worth pinning. It never rewrites a fact. Good to run before bed; progress is saved after every call.</p>
     ${arch.entities.map(weftEntityHtml).join('')}
+    ${arch.deleted.length ? `<details class="section" data-wf="deleted"${wfOpen('deleted')}><summary>Deleted facts (${arch.deleted.length})</summary><div class="sec-body">
+      ${arch.deleted.map((d) => `<div class="wf-row wf-hidden"><div class="wf-text">${esc(d.entity)}: ${esc(d.text)}</div><button class="btn sm" data-action="weft-fact-restore" data-k="${d.key}">Restore</button></div>`).join('')}</div></details>` : ''}
   `, 'tall');
+  for (const sel of ['.sheet-body', '.sheet']) { const el = $(sel); if (el && tops[sel]) el.scrollTop = tops[sel]; }
 }
 function weftRefresh(key) {
   const chat = S.chat;
@@ -3537,6 +3551,7 @@ function restoreExportedChatMemory(chat, md) {
       if (v.d === 'durable' || v.d === 'temporary') o.d = v.d;
       if (v.pin === 'yes' || v.pin === 'no') o.pin = v.pin;
       if (v.hide === true) o.hide = true;
+      if (v.del === true) o.del = true;
       if (v.st === 'superseded') o.st = 'superseded';
       if (Object.keys(o).length) facts[k] = o;
     }
@@ -5067,6 +5082,14 @@ const actions = {
   'weft-fact-dur': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { d: g && g.durability === 'durable' ? 'temporary' : 'durable' })),
   'weft-fact-pin': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { pin: g && g.pin === 'yes' ? null : 'yes' })),
   'weft-fact-hide': (el) => weftFlag(el, (rv, k, g) => WA.setFlag(rv, k, { hide: !(g && g.hidden) })),
+  'weft-fact-del': async (el) => { WA.setFlag(weftReview(S.chat), el.dataset.k, { del: true }); await saveChat(S.chat); weftReviewSheet(); },
+  'weft-fact-restore': async (el) => { WA.setFlag(weftReview(S.chat), el.dataset.k, { del: false }); await saveChat(S.chat); weftReviewSheet(); },
+  'weft-del-older': async (el) => {
+    const e = weftArchive(S.chat).entities.find((x) => x.id === el.dataset.e);
+    if (!e) return;
+    const n = WA.deleteOlder(weftReview(S.chat), e);
+    await saveChat(S.chat); weftReviewSheet(); toast(`Deleted ${n} older note${n === 1 ? '' : 's'}. They can be restored at the bottom.`, 4000);
+  },
   'weft-pin-no': (el) => weftFlag(el, (rv, k) => WA.setFlag(rv, k, { pin: 'no' })),
   'weft-link-keep': async (el) => { WA.resolveConflict(weftReview(S.chat), el.dataset.link, el.dataset.keep); await saveChat(S.chat); weftReviewSheet(); },
   'weft-link-dismiss': async (el) => { WA.dismissLink(weftReview(S.chat), el.dataset.link); await saveChat(S.chat); weftReviewSheet(); },

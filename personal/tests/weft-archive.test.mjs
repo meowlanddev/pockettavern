@@ -104,4 +104,38 @@ assert.equal(after.entities.find(e => e.name === 'Rachel').groups.length, 4);
 // stop request ends the run cleanly
 const stopRes = await A.runConsistency({ archive: arch, askModel: async () => { throw Object.assign(new Error('Stopped'), { weftStopped: true }); } });
 assert.equal(stopRes.calls, 0);
+
+// ---- older notes: newer temporary notes covering every topic replace an older one automatically
+const inj = [
+  scene(1, 40, [F('Sam', 'temporary', 'bruised right ribs from a slapshot'), F('Sam', 'temporary', 'swollen right knee and split knuckle'), F('Sam', 'temporary', 'told Pat he was fine despite his rib'), F('Sam', 'durable', 'crooked right pinky')]),
+  scene(41, 80, [F('Sam', 'temporary', 'cracked ninth rib'), F('Sam', 'temporary', 'right knee in a hinged brace')]),
+  scene(81, 120, [F('Sam', 'temporary', 'split knuckle reopened'), F('Sam', 'temporary', 'new bruised cheekbone')]),
+];
+const ia = A.buildArchive(inj, A.newReview());
+const sam = ia.entities.find(e => e.name === 'Sam');
+const st = txt => sam.groups.find(g => g.text === txt);
+assert.equal(st('bruised right ribs from a slapshot').status, 'superseded'); assert.equal(st('bruised right ribs from a slapshot').auto, true);
+assert.equal(st('swollen right knee and split knuckle').status, 'superseded'); // knee (scene 41) and knuckle (scene 81) are both covered later
+assert.equal(st('cracked ninth rib').status, 'current');              // nothing newer mentions ribs
+assert.equal(st('told Pat he was fine despite his rib').status, 'current'); // an event, not a state
+assert.equal(st('crooked right pinky').status, 'current');            // durable facts are never auto-replaced
+// a compound note keeps living while any of its topics is only mentioned there
+const comp = A.buildArchive([scene(1, 40, [F('Sam', 'temporary', 'cracked rib, split knuckle')]), scene(41, 80, [F('Sam', 'temporary', 'rib is taped')])], A.newReview());
+assert.equal(comp.entities[0].groups[0].status, 'current');
+// pinned notes are never auto-replaced
+const pinRv = A.newReview(); A.setFlag(pinRv, st('bruised right ribs from a slapshot').key, { pin: 'yes' });
+assert.equal(A.buildArchive(inj, pinRv).entities.find(e => e.name === 'Sam').groups.find(g => g.text.startsWith('bruised right ribs')).status, 'current');
+// delete, bulk delete of older notes, and restore
+const drv = A.newReview();
+const n = A.deleteOlder(drv, sam);
+assert.equal(n, 2);
+let da = A.buildArchive(inj, drv);
+assert.equal(da.deleted.length, 2); assert.ok(!da.entities.find(e => e.name === 'Sam').groups.some(g => g.text.startsWith('bruised right ribs')));
+A.setFlag(drv, da.deleted[0].key, { del: false });
+assert.equal(A.buildArchive(inj, drv).deleted.length, 1);
+// one-off delete leaves everything else alone; only current, visible notes go to the model check
+const one = A.newReview(); A.setFlag(one, st('crooked right pinky').key, { del: true });
+assert.equal(A.buildArchive(inj, one).entities.find(e => e.name === 'Sam').groups.length, 7);
+const cur = sam.groups.filter(g => g.status === 'current' && !g.hidden).length;
+assert.equal(A.checkable(ia).length, cur >= 3 ? 1 : 0);
 console.log('weft-archive tests passed');

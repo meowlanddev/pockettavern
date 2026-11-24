@@ -125,6 +125,14 @@ await assert.rejects(() => W.runBackfill({ ...base, scenes: [], summarize: async
   assert.ok(r.scenes.length <= 1);
 }
 
+// --- atomic facts: the prompt says so, and the previous scene's facts are passed so they are not repeated
+assert.match(W.SCENE_PROMPT, /ONE short statement about ONE thing/);
+assert.match(W.SCENE_PROMPT, /do not repeat one unless this scene changed it/);
+const withKnown = W.buildSceneInput(mk(4), 1, 4, speaker, '', { knownFacts: ['Rachel: sprained ankle'] });
+assert.match(withKnown, /<facts_already_recorded>\n- Rachel: sprained ankle/);
+assert.doesNotMatch(W.buildSceneInput(mk(4), 1, 4, speaker, '', {}), /facts_already_recorded/);
+assert.ok(seen.some((i, k) => k > 0 && i.includes('<facts_already_recorded>')));   // later scenes get the earlier scene's facts
+
 // --- invisible characters are stripped from model output, source text and existing records
 const zw = '\u200b\u200d\u2060\ufeff';
 const pz = W.parseSceneOutput(`SUMMARY: Clean text.${zw.repeat(10)}\nNAMES: A${zw}, B\nFACTS:\n- A | durable | likes tea${zw}`);

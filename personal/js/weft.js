@@ -21,13 +21,13 @@ Rules:
 Reply in exactly this format:
 SUMMARY: <the record>
 NAMES: <comma-separated people, places and notable objects that appear>
-FACTS: <at most 12 lines, formatted "- Name | durable or temporary | fact". Only facts likely to matter many scenes later: identity, family, home and addresses, job, injuries and medical status, legal status, important possessions, secrets and who knows them, promises. Skip meals, clothing, times of day, weather, phone numbers, door or keypad codes, account handles, and moment-to-moment actions or gestures. Use the exact name as written in the story. "durable" = stays true long-term (home, job, family, history, rules of the world). "temporary" = will change (an injury, a plan, where someone is right now). Write "- none" if nothing.>
+FACTS: <at most 15 lines, formatted "- Name | durable or temporary | fact". Each line is ONE short statement about ONE thing (one injury, one address, one relationship); never join separate facts with commas, semicolons or "and". A list of facts already recorded may be given: do not repeat one unless this scene changed it. Only facts likely to matter many scenes later: identity, family, home and addresses, job, injuries and medical status, legal status, important possessions, secrets and who knows them, promises. Skip meals, clothing, times of day, weather, phone numbers, door or keypad codes, account handles, and moment-to-moment actions or gestures. Use the exact name as written in the story. "durable" = stays true long-term (home, job, family, history, rules of the world). "temporary" = will change (an injury, a plan, where someone is right now). Write "- none" if nothing.>
 RELATIONSHIPS: <one per line, formatted "- A & B | what changed between them". Only if their relationship meaningfully changed (trust, closeness, conflict, a promise). Write "- none" if nothing.>`;
 
 export const DEFAULT_WEFT_SETTINGS = Object.freeze({
   enabled: false,
   model: '',
-  v: 5, // bump to replace saved prompts/sizes with new defaults on next load
+  v: 6, // bump to replace saved prompts/sizes with new defaults on next load
   minSceneTokens: 4000,
   targetSceneTokens: 15000,
   maxSceneTokens: 30000,
@@ -168,7 +168,7 @@ export function parseSceneOutput(raw) {
 // Longer scenes get longer records: about 1 word per 60 tokens of scene, between 150 and 600 words.
 export const recordWords = tokens => Math.min(600, Math.max(150, Math.round(tokens / 60 / 10) * 10));
 
-export function buildSceneInput(messages, from, to, speaker, previousSummary = '', { continues = false, continued = false, tokens = 0 } = {}) {
+export function buildSceneInput(messages, from, to, speaker, previousSummary = '', { continues = false, continued = false, tokens = 0, knownFacts = [] } = {}) {
   const body = [];
   for (let i = from - 1; i < to; i++) {
     const m = messages[i];
@@ -178,7 +178,8 @@ export function buildSceneInput(messages, from, to, speaker, previousSummary = '
   const notes = [`Keep the record under ${recordWords(tokens)} words.`];
   if (continued) notes.push('This passage continues the previous one: the same scene is still going.');
   if (continues) notes.push('The scene is still going after this passage ends: describe only this passage, do not conclude it.');
-  return `${previousSummary ? `<previous_scene_for_context_only>\n${previousSummary}\n</previous_scene_for_context_only>\n\n` : ''}<note>${notes.join(' ')}</note>\n\n<scene messages="${from}-${to}">\n${body.join('\n\n')}\n</scene>`;
+  const known = knownFacts.length ? `<facts_already_recorded>\n${knownFacts.map(f => `- ${f}`).join('\n')}\n</facts_already_recorded>\n\n` : '';
+  return `${known}${previousSummary ? `<previous_scene_for_context_only>\n${previousSummary}\n</previous_scene_for_context_only>\n\n` : ''}<note>${notes.join(' ')}</note>\n\n<scene messages="${from}-${to}">\n${body.join('\n\n')}\n</scene>`;
 }
 
 export function makeScene(messages, from, to, parsed, now = Date.now(), extra = {}) {
@@ -231,7 +232,7 @@ export async function runBackfill({ messages, scenes, opts, speaker, askBoundary
       const prev = out.length ? out[out.length - 1] : null;
       let sceneTokens = 0;
       for (let k = from - 1; k < to; k++) sceneTokens += tok(messages[k]);
-      const input = buildSceneInput(messages, from, to, speaker, prev ? prev.summary : '', { continues: cut.forced, continued: !!(prev && prev.continues), tokens: sceneTokens });
+      const input = buildSceneInput(messages, from, to, speaker, prev ? prev.summary : '', { continues: cut.forced, continued: !!(prev && prev.continues), tokens: sceneTokens, knownFacts: prev ? (prev.facts || []).slice(0, 25).map(f => (f.name ? `${f.name}: ` : '') + f.text) : [] });
       let parsed = parseSceneOutput(await summarize(input));
       if (!parsed) parsed = parseSceneOutput(await summarize(input)); // one retry on an unusable reply
       if (!parsed) throw new Error(`The model did not return a usable scene record for messages ${from}-${to}.`);

@@ -40,6 +40,13 @@ function resolveNames(counts) {
   return { entities, byName };
 }
 
+// Body parts / things whose "current state" is replaced by a newer note (injuries heal, cars get repaired).
+const TOPICS = [['rib', /\bribs?\b/i], ['knee', /\bknees?\b/i], ['knuckle', /\bknuckles?\b/i], ['ankle', /\bankles?\b/i], ['wrist', /\bwrists?\b/i],
+  ['cheek', /\bcheek(?:bone)?s?\b/i], ['temple', /\btemples?\b/i], ['ear', /\bears?\b|tinnitus/i], ['shoulder', /\bshoulders?\b/i], ['neck', /\bneck\b/i],
+  ['head', /\bhead\b|concussion/i], ['hand', /\bhands?\b/i], ['civic', /\bcivic\b/i]];
+const EVENT = /\b(lied|told|texted|called|asked|said|promised|agreed|gave|ordered|decided|plans?|scheduled|wrote|sent|offered)\b/i;
+export const topicsOf = text => TOPICS.filter(([, re]) => re.test(String(text))).map(([k]) => k);
+
 const normDur = d => (d === 'durable' || d === 'temporary' ? d : 'unknown');
 
 // Build the archive from scenes + the user's review state. Deterministic: same input, same output.
@@ -102,19 +109,32 @@ export function buildArchive(scenes, review = {}) {
   const supersededBy = new Map();
   for (const l of links) if (l.type === 'superseded' && !l.dismissed && l.keys.length === 2) supersededBy.set(l.keys[0], l.keys[1]);
   const out = [];
+  const deleted = [];
   for (const e of ent.values()) {
     const groups = e.groups.map(g => {
       const o = rf[g.key] || {};
       const dur = g.durs.filter(d => d === 'durable').length, tmp = g.durs.filter(d => d === 'temporary').length;
       const auto = dur + tmp === 0 ? 'unknown' : dur >= tmp ? 'durable' : 'temporary';
       g.scenes.sort((a, b) => a.from - b.from);
-      return { key: g.key, text: g.text, scenes: g.scenes, durability: o.d || auto, pin: o.pin || null, hidden: !!o.hide,
+      return { key: g.key, text: g.text, scenes: g.scenes, durability: o.d || auto, pin: o.pin || null, hidden: !!o.hide, deleted: !!o.del, auto: false,
         status: o.st === 'superseded' || supersededBy.has(g.key) ? 'superseded' : 'current', supersededBy: supersededBy.get(g.key) || null };
     }).sort((a, b) => a.scenes[0].from - b.scenes[0].from);
+    for (const g of groups) if (g.deleted) deleted.push({ entity: e.name, key: g.key, text: g.text });
+    const live = groups.filter(g => !g.deleted);
+    // A temporary note is "older" when newer temporary notes cover every body part / topic it mentions. Never touches pinned or durable facts.
+    const temp = live.filter(g => g.durability === 'temporary' && !g.hidden);
+    for (const g of temp) g.topics = topicsOf(g.text);
+    for (const g of temp) {
+      if (g.status === 'superseded' || g.pin === 'yes' || !g.topics.length || EVENT.test(g.text)) continue; // events (told, lied, gave...) are not states
+      const last = g.scenes[g.scenes.length - 1].from;
+      if (g.topics.every(t => temp.some(h => h !== g && h.topics.includes(t) && h.scenes[h.scenes.length - 1].from > last))) { g.status = 'superseded'; g.auto = true; }
+    }
+    for (const g of temp) delete g.topics;
+    groups.length = 0; groups.push(...live);
     const relationships = [...e.rels.entries()].map(([who, items]) => ({ with: who, items })).sort((a, b) => b.items.length - a.items.length);
     if (groups.length || relationships.length) out.push({ id: e.id, name: e.name, aliases: e.aliases, weight: e.weight, groups, relationships });
   }
-  if (unassigned.groups.length || unassigned.rels.size) out.push({ id: 'unassigned', name: unassigned.name, aliases: [], weight: 0, groups: unassigned.groups.map(g => ({ key: fnv('u|' + [...g.toks].sort().join(' ')), text: g.text, scenes: g.scenes, durability: 'unknown', pin: null, hidden: false, status: 'current', supersededBy: null })), relationships: [] });
+  if (unassigned.groups.length || unassigned.rels.size) out.push({ id: 'unassigned', name: unassigned.name, aliases: [], weight: 0, groups: unassigned.groups.map(g => ({ key: fnv('u|' + [...g.toks].sort().join(' ')), text: g.text, scenes: g.scenes, durability: 'unknown', pin: null, hidden: false, deleted: false, auto: false, status: 'current', supersededBy: null })), relationships: [] });
   out.sort((a, b) => b.groups.length + b.relationships.length - (a.groups.length + a.relationships.length));
   const keyIndex = new Map();
   for (const e of out) for (const g of e.groups) keyIndex.set(g.key, { e, g });
@@ -130,7 +150,7 @@ export function buildArchive(scenes, review = {}) {
   const conflicts = links.filter(l => l.type === 'conflict' && !l.dismissed && !l.resolved).map(l => ({
     id: l.id, reason: l.reason || '', items: l.keys.map(k => keyIndex.get(k)).filter(Boolean).map(({ e, g }) => ({ entity: e.name, key: g.key, text: g.text, scenes: g.scenes })),
   })).filter(c => c.items.length === 2);
-  return { entities: out, suggestions: suggestions.slice(0, 40), conflicts };
+  return { entities: out, suggestions: suggestions.slice(0, 40), conflicts, deleted };
 }
 
 // ---- review state (what the user decided). Pure helpers so they can be tested.
@@ -157,6 +177,12 @@ export function resolveConflict(review, id, keepKey) {
   for (const k of l.keys) if (k !== keepKey) setFlag(review, k, { st: 'superseded' });
   l.resolved = true;
   return review;
+}
+// Delete every older (replaced) note of one entity. Pinned notes are kept. Returns how many were deleted.
+export function deleteOlder(review, entity) {
+  let n = 0;
+  for (const g of entity.groups) if (g.status === 'superseded' && g.pin !== 'yes') { setFlag(review, g.key, { del: true }); n++; }
+  return n;
 }
 export function dismissLink(review, id) { const l = review.links.find(x => x.id === id); if (l) l.dismissed = true; return review; }
 
@@ -189,14 +215,15 @@ export function parseConsistency(raw, n) {
 }
 
 // Entities worth sending to the model: enough facts for a conflict to exist.
-export const checkable = archive => archive.entities.filter(e => e.id !== 'unassigned' && e.groups.filter(g => !g.hidden).length >= 3);
+const liveGroups = e => e.groups.filter(g => !g.hidden && g.status === 'current');
+export const checkable = archive => archive.entities.filter(e => e.id !== 'unassigned' && liveGroups(e).length >= 3);
 
 // Run the check one entity at a time. askModel(system, user) is paced/injected by the caller.
 export async function runConsistency({ archive, askModel, onLinks, shouldStop = () => false, maxPerCall = 80 }) {
   let calls = 0;
   for (const e of checkable(archive)) {
     if (shouldStop()) break;
-    const groups = e.groups.filter(g => !g.hidden).slice(-maxPerCall);
+    const groups = liveGroups(e).slice(-maxPerCall);
     let raw;
     try { raw = await askModel(CONSISTENCY_PROMPT, consistencyInput(e.name, groups)); } catch (err) { if (err && err.weftStopped) break; throw err; }
     calls++;
