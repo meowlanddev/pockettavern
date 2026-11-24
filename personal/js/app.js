@@ -20,7 +20,7 @@ import * as WEFT from './weft.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.29)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.30)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -808,7 +808,7 @@ function weftSheet() {
     </div>
     ${est.scenes ? `<p class="hint">Estimate for the remaining ${est.messages} messages (~${k(est.tokens)} tokens): roughly ${est.scenesLow}-${est.scenesHigh} scenes, ~${est.calls} model calls, ~${k(est.inputTokens)} tokens in and ~${k(est.outputTokens)} out${est.minutes ? `. At one call every ${cfg.callIntervalSec}s that is about ${est.minutes} minutes` : ''}. It is a rough guess; the real count depends on where the model finds scene breaks. Progress is saved after every scene, so you can stop and resume. Don't chat while it runs: your replies share the same rate limit.</p>` : ''}
     ${stale.size ? '<p class="hint" style="color:var(--danger,#e66)">⚠ Messages inside some scenes were edited after the record was written. Those scenes are flagged below; stage 1 does not rebuild them.</p>' : ''}
-    ${scenes.map((sc) => `<details class="section"><summary>Messages ${sc.from}–${sc.to} · ~${k(sc.tokens)} tokens${sc.edited ? ' · ✎ edited' : ''}${stale.has(sc.id) ? ' · ⚠ out of date' : ''}</summary><div class="sec-body">
+    ${scenes.map((sc) => `<details class="section"><summary>Messages ${sc.from}–${sc.to} · ~${k(sc.tokens)} tokens${sc.continues ? ' · continues ↓' : ''}${sc.edited ? ' · ✎ edited' : ''}${stale.has(sc.id) ? ' · ⚠ out of date' : ''}</summary><div class="sec-body">
       <label class="field"><span class="label">Scene record</span><textarea id="weft-sum-${sc.id}" rows="8" spellcheck="false">${esc(sc.summary)}</textarea></label>
       <label class="field"><span class="label">Facts<span class="hint">one per line: Name | durable or temporary | fact</span></span><textarea id="weft-facts-${sc.id}" rows="4" spellcheck="false">${esc(WEFT.formatFactLines(sc.facts))}</textarea></label>
       <label class="field"><span class="label">Relationships<span class="hint">one per line: A &amp; B | what changed</span></span><textarea id="weft-rels-${sc.id}" rows="3" spellcheck="false">${esc(WEFT.formatRelationshipLines(sc.relationships))}</textarea></label>

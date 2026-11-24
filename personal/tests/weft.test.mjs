@@ -7,6 +7,7 @@ const body = n => `m${n} ` + 'x'.repeat(350 - String(n).length - 2);
 const mk = n => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: body(i + 1) }));
 const speaker = m => (m.role === 'user' ? 'Rachel' : 'JD');
 const opts = { minSceneTokens: 1000, maxSceneTokens: 3000, boundaryPrompt: 'b', scenePrompt: 's' };
+const seen = []; // inputs the mock summarizer received
 const sceneReply = n => `SUMMARY: Scene text ${n}.\nNAMES: Rachel, JD\nFACTS:\n- Rachel | temporary | sprained her left ankle\n- J.D. | durable | lives in Scioto Lofts #1104\nRELATIONSHIPS:\n- Rachel & J.D. | she told him about her father`;
 
 // --- parsers
@@ -71,12 +72,18 @@ const boundary = async text => { // model: new scene every time it sees message 
   return JSON.stringify([21, 51].filter(n => nums.includes(n)));
 };
 let calls = 0;
-const summarize = async () => { calls++; return sceneReply(calls); };
+const summarize = async input => { calls++; seen.push(input); return sceneReply(calls); };
 const base = { messages: all, opts, speaker, askBoundary: boundary, summarize };
 const full = await W.runBackfill({ ...base, scenes: [] });
 assert.ok(full.scenes.length >= 3);
 for (let i = 1; i < full.scenes.length; i++) assert.equal(full.scenes[i].from, full.scenes[i - 1].to + 1); // contiguous, no gaps/overlaps
 assert.equal(full.scenes[0].to, 20); assert.equal(full.scenes[1].to, 48); // #51 is beyond the max-size window, so scene 2 is force-cut
+// forced cuts are marked as continuing, natural breaks are not, and the summarizer is told so
+assert.equal(full.scenes[0].continues, false);
+assert.equal(full.scenes[1].continues, true);   // scene 2 hit the max size
+assert.ok(seen.some(i => i.includes('still going after this passage ends')));
+assert.ok(seen.some(i => i.includes('continues the previous one')));   // the part after a forced cut
+assert.ok(seen[0].includes('about 150 words'));
 // stop after one scene, then resume: same scene boundaries as an uninterrupted run
 let n = 0;
 const part = await W.runBackfill({ ...base, scenes: [], shouldStop: () => n >= 1, onScene: () => { n++; } });
@@ -117,6 +124,11 @@ await assert.rejects(() => W.runBackfill({ ...base, scenes: [], summarize: async
   const r = await W.runBackfill({ messages: mk(80), scenes: [], opts, speaker, askBoundary: t => p3(() => boundary(t)), summarize: i => p3(() => summarize(i)), shouldStop: () => stop2 });
   assert.ok(r.scenes.length <= 1);
 }
+
+// --- record length scales with scene size
+assert.equal(W.recordWords(3000), 150);
+assert.equal(W.recordWords(30000), 500);
+assert.equal(W.recordWords(200000), 600);
 
 // --- estimate
 const est = W.estimateBackfill(all, 0, { ...opts, callIntervalSec: 21 });

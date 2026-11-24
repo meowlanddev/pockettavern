@@ -13,7 +13,7 @@ Most passages contain few breaks, and many contain none. Reply with ONLY a JSON 
 
 export const SCENE_PROMPT = `You write one permanent memory record for a roleplay scene, so the story can be recalled accurately later.
 Rules:
-- Past tense, third person, plain and factual. 150-350 words.
+- Past tense, third person, plain and factual. The input states how long the record should be; follow that. If a note says the scene continues past this passage, describe only this passage and do not conclude or wrap up the scene. If a note says this passage continues the previous one, do not re-introduce the setting or characters.
 - Record only what actually happened or was stated in this scene: who was where, what was done, said, decided, learned, or changed. Keep exact names, places, numbers, objects, injuries and times as written.
 - Do NOT invent, guess, or interpret motives. Do NOT add open threats, unresolved questions, predictions, or what might happen next. Describe the scene's end state only.
 - Do not copy long passages of dialogue.
@@ -26,11 +26,11 @@ RELATIONSHIPS: <one per line, formatted "- A & B | what changed between them". O
 export const DEFAULT_WEFT_SETTINGS = Object.freeze({
   enabled: false,
   model: '',
-  v: 2, // bump to replace saved prompts/sizes with new defaults on next load
+  v: 3, // bump to replace saved prompts/sizes with new defaults on next load
   minSceneTokens: 4000,
-  targetSceneTokens: 9000,
-  maxSceneTokens: 14000,
-  maxOutputTokens: 1100,
+  targetSceneTokens: 15000,
+  maxSceneTokens: 30000,
+  maxOutputTokens: 1600,
   callIntervalSec: 21, // 3 requests per minute = one call every 20s; 21 leaves a little slack
   boundaryPrompt: BOUNDARY_PROMPT,
   scenePrompt: SCENE_PROMPT,
@@ -147,21 +147,27 @@ export function parseSceneOutput(raw) {
   };
 }
 
-export function buildSceneInput(messages, from, to, speaker, previousSummary = '') {
+// Longer scenes get longer records: about 1 word per 60 tokens of scene, between 150 and 600 words.
+export const recordWords = tokens => Math.min(600, Math.max(150, Math.round(tokens / 60 / 10) * 10));
+
+export function buildSceneInput(messages, from, to, speaker, previousSummary = '', { continues = false, continued = false, tokens = 0 } = {}) {
   const body = [];
   for (let i = from - 1; i < to; i++) {
     const m = messages[i];
     if (m.hidden || !messageText(m).trim()) continue;
     body.push(`${speaker(m)}: ${messageText(m)}`);
   }
-  return `${previousSummary ? `<previous_scene_for_context_only>\n${previousSummary}\n</previous_scene_for_context_only>\n\n` : ''}<scene messages="${from}-${to}">\n${body.join('\n\n')}\n</scene>`;
+  const notes = [`Write the record in about ${recordWords(tokens)} words.`];
+  if (continued) notes.push('This passage continues the previous one: the same scene is still going.');
+  if (continues) notes.push('The scene is still going after this passage ends: describe only this passage, do not conclude it.');
+  return `${previousSummary ? `<previous_scene_for_context_only>\n${previousSummary}\n</previous_scene_for_context_only>\n\n` : ''}<note>${notes.join(' ')}</note>\n\n<scene messages="${from}-${to}">\n${body.join('\n\n')}\n</scene>`;
 }
 
-export function makeScene(messages, from, to, parsed, now = Date.now()) {
+export function makeScene(messages, from, to, parsed, now = Date.now(), extra = {}) {
   let tokens = 0;
   for (let i = from - 1; i < to; i++) tokens += tok(messages[i]);
   return { id: `s${from}-${to}`, from, to, tokens, fingerprint: rangeFingerprint(messages, from, to),
-    summary: parsed.summary, names: parsed.names, facts: parsed.facts || [], relationships: parsed.relationships || [], edited: false, at: now };
+    summary: parsed.summary, names: parsed.names, facts: parsed.facts || [], relationships: parsed.relationships || [], continues: extra.continues === true, edited: false, at: now };
 }
 
 export const nextStart = scenes => (scenes.length ? scenes[scenes.length - 1].to : 0);
@@ -185,7 +191,7 @@ export function estimateBackfill(messages, start, opts) {
   return {
     messages: count, tokens, scenes, scenesLow, scenesHigh, calls: scenes * 2,
     inputTokens: Math.round(tokens * 1.45 + scenes * promptTokens),
-    outputTokens: scenes * 560,
+    outputTokens: Math.round(tokens / 60 * 1.4) + scenes * 350,
     minutes: Math.ceil(scenes * 2 * (Number(opts.callIntervalSec) || 0) / 60),
   };
 }
@@ -204,11 +210,14 @@ export async function runBackfill({ messages, scenes, opts, speaker, askBoundary
       const cut = await findSceneEnd({ messages, start, minTokens: opts.minSceneTokens, maxTokens: opts.maxSceneTokens, targetTokens: opts.targetSceneTokens, speaker, askBoundary, flush });
       if (!cut) break;
       const from = start + 1, to = cut.end;
-      const input = buildSceneInput(messages, from, to, speaker, out.length ? out[out.length - 1].summary : '');
+      const prev = out.length ? out[out.length - 1] : null;
+      let sceneTokens = 0;
+      for (let k = from - 1; k < to; k++) sceneTokens += tok(messages[k]);
+      const input = buildSceneInput(messages, from, to, speaker, prev ? prev.summary : '', { continues: cut.forced, continued: !!(prev && prev.continues), tokens: sceneTokens });
       let parsed = parseSceneOutput(await summarize(input));
       if (!parsed) parsed = parseSceneOutput(await summarize(input)); // one retry on an unusable reply
       if (!parsed) throw new Error(`The model did not return a usable scene record for messages ${from}-${to}.`);
-      const scene = makeScene(messages, from, to, parsed);
+      const scene = makeScene(messages, from, to, parsed, Date.now(), { continues: cut.forced });
       out.push(scene);
       made++;
       if (onScene) await onScene(scene, out);
