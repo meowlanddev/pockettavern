@@ -139,6 +139,10 @@ export function parseFactLines(text) {
     return { name: '', durability: 'unknown', text: line };
   }).filter(f => f.text);
 }
+// Phone numbers, door/keypad codes and passwords never matter for the story. The prompt asks the model to skip
+// them, but models ignore that, so facts like these are also dropped in code. (A story codeword is kept.)
+export const isNoiseFact = f => /\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|\b\d{3}-\d{4}\b|\b(?:door|gate|keypad|entry|access|condo|lock|alarm)\s+(?:codes?|pins?)\b|\bpass(?:word|code)s?\b|\bPIN\b|\b\d{4,6}#/i.test(String((f && f.text) || ''));
+
 export const formatFactLines = facts => (facts || []).map(f => `${f.name || ''} | ${f.durability || 'unknown'} | ${f.text}`).join('\n');
 
 export function parseRelationshipLines(text) {
@@ -156,7 +160,7 @@ export function parseSceneOutput(raw) {
   return {
     summary,
     names: (sec.NAMES || '').split('\n')[0].split(',').map(x => x.trim()).filter(Boolean),
-    facts: parseFactLines(sec.FACTS ?? sec.CHANGED),
+    facts: parseFactLines(sec.FACTS ?? sec.CHANGED).filter(f => !isNoiseFact(f)),
     relationships: parseRelationshipLines(sec.RELATIONSHIPS),
   };
 }
@@ -181,7 +185,7 @@ export function makeScene(messages, from, to, parsed, now = Date.now(), extra = 
   let tokens = 0;
   for (let i = from - 1; i < to; i++) tokens += tok(messages[i]);
   return { id: `s${from}-${to}`, from, to, tokens, fingerprint: rangeFingerprint(messages, from, to),
-    summary: parsed.summary, names: parsed.names, facts: parsed.facts || [], relationships: parsed.relationships || [], continues: extra.continues === true, edited: false, at: now };
+    summary: parsed.summary, names: parsed.names, facts: parsed.facts || [], relationships: parsed.relationships || [], continues: extra.continues === true, pv: extra.pv ?? null, edited: false, at: now };
 }
 
 export const nextStart = scenes => (scenes.length ? scenes[scenes.length - 1].to : 0);
@@ -231,7 +235,7 @@ export async function runBackfill({ messages, scenes, opts, speaker, askBoundary
       let parsed = parseSceneOutput(await summarize(input));
       if (!parsed) parsed = parseSceneOutput(await summarize(input)); // one retry on an unusable reply
       if (!parsed) throw new Error(`The model did not return a usable scene record for messages ${from}-${to}.`);
-      const scene = makeScene(messages, from, to, parsed, Date.now(), { continues: cut.forced });
+      const scene = makeScene(messages, from, to, parsed, Date.now(), { continues: cut.forced, pv: opts.v });
       out.push(scene);
       made++;
       if (onScene) await onScene(scene, out);

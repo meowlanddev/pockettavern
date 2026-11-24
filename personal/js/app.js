@@ -20,7 +20,7 @@ import * as WEFT from './weft.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.33)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.34)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -798,7 +798,7 @@ function weftSheet() {
     ? `${scenes.length ? 'Continue' : 'Build'} scenes (about ${est.scenes} more, ~${est.calls} calls)`
     : 'Nothing new to build yet';
   openSheet(`
-    <div class="sheet-title">WEFT scenes <span class="muted small">· preview</span></div>
+    <div class="sheet-title">WEFT scenes <span class="muted small">· preview · prompts v${cfg.v}</span></div>
     <p class="hint">Scenes are saved with this chat and are not sent to the model yet. Your Narrative Database is untouched. Existing scenes are never rewritten.</p>
     <div class="mem-stats">
       <div><b>${scenes.length}</b> scenes</div>

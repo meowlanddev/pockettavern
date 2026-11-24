@@ -133,6 +133,13 @@ const cl = W.cleanScenes([{ ...W.makeScene(mk(4), 1, 4, p), summary: 'Hi' + zw }
 assert.equal(cl.changed, true); assert.equal(cl.scenes[0].summary, 'Hi');
 assert.equal(W.cleanScenes(cl.scenes).changed, false);
 
+// --- code/number facts are dropped in code, ordinary facts and story codewords are kept
+const noisy = W.parseSceneOutput(`SUMMARY: x\nFACTS:\n- JD | durable | personal cell number is 614-555-0139\n- JD | temporary | gave Rachel his door code (0814#)\n- JD | durable | keypad code is 123456\n- Mara | durable | uses the codeword "strawberry" to check Rachel is safe\n- JD | durable | lives in unit 1104`);
+assert.deepEqual(noisy.facts.map(f => f.text), ['uses the codeword "strawberry" to check Rachel is safe', 'lives in unit 1104']);
+assert.equal(W.isNoiseFact({ text: 'Rachel has his condo fob' }), false);
+// scenes remember which prompt version built them
+assert.equal(W.makeScene(mk(4), 1, 4, p, 0, { pv: 5 }).pv, 5);
+
 // --- record length scales with scene size
 assert.equal(W.recordWords(3000), 150);
 assert.equal(W.recordWords(30000), 500);
