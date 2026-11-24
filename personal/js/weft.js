@@ -14,19 +14,20 @@ Most passages contain few breaks, and many contain none. Reply with ONLY a JSON 
 export const SCENE_PROMPT = `You write one permanent memory record for a roleplay scene, so the story can be recalled accurately later.
 Rules:
 - Past tense, third person, plain and factual. The input gives a maximum length; stay under it, in two or three short paragraphs. If a note says the scene continues past this passage, describe only this passage and do not conclude or wrap up the scene. If a note says this passage continues the previous one, do not re-introduce the setting or characters.
-- Record only what actually happened or was stated in this scene: who was where, what was done, said, decided, learned, or changed. Keep exact names, places, numbers, objects, injuries and times as written.
+- Record only what actually happened or was stated in this scene: who was where, what was done, said, decided, learned, or changed. Keep exact names, places, injuries and anything the story depends on, as written. Leave out phone numbers, door or keypad codes, passwords, account handles and exact clock times unless the story turns on them.
 - Do NOT invent, guess, or interpret motives. Do NOT add open threats, unresolved questions, predictions, or what might happen next. Describe the scene's end state only.
+- Leave out physical choreography (who knelt, held a hand, moved across the room, sat on the bed). Say what happened and what it meant, not how people moved, unless a movement caused an injury or became a plot point.
 - Do not narrate blow by blow and do not copy long passages of dialogue. For sex, violence or other intense moments, say in one plain sentence what happened and keep only what matters later (who, consent, protection, injuries, anything said that changed the relationship). No graphic or anatomical detail.
 Reply in exactly this format:
 SUMMARY: <the record>
 NAMES: <comma-separated people, places and notable objects that appear>
-FACTS: <at most 12 lines, formatted "- Name | durable or temporary | fact". Only facts likely to matter many scenes later: identity, family, home and addresses, job, injuries and medical status, legal status, important possessions, secrets and who knows them, promises. Skip meals, clothing, times of day, weather and moment-to-moment actions. Use the exact name as written in the story. "durable" = stays true long-term (home, job, family, history, rules of the world). "temporary" = will change (an injury, a plan, where someone is right now). Write "- none" if nothing.>
+FACTS: <at most 12 lines, formatted "- Name | durable or temporary | fact". Only facts likely to matter many scenes later: identity, family, home and addresses, job, injuries and medical status, legal status, important possessions, secrets and who knows them, promises. Skip meals, clothing, times of day, weather, phone numbers, door or keypad codes, account handles, and moment-to-moment actions or gestures. Use the exact name as written in the story. "durable" = stays true long-term (home, job, family, history, rules of the world). "temporary" = will change (an injury, a plan, where someone is right now). Write "- none" if nothing.>
 RELATIONSHIPS: <one per line, formatted "- A & B | what changed between them". Only if their relationship meaningfully changed (trust, closeness, conflict, a promise). Write "- none" if nothing.>`;
 
 export const DEFAULT_WEFT_SETTINGS = Object.freeze({
   enabled: false,
   model: '',
-  v: 4, // bump to replace saved prompts/sizes with new defaults on next load
+  v: 5, // bump to replace saved prompts/sizes with new defaults on next load
   minSceneTokens: 4000,
   targetSceneTokens: 15000,
   maxSceneTokens: 30000,
