@@ -20,7 +20,7 @@ import * as WEFT from './weft.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.30)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.31)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3358,13 +3358,14 @@ function exportChat(includeMemory = false) {
 }
 
 function exportChatChoice() {
-  if (!S.chat?.narrativeDb?.text) return exportChat();
+  const c = S.chat;
+  if (!c?.narrativeDb?.text && !c?.weft?.scenes?.length && !c?.summary?.text && !c?.authorsNote?.text) return exportChat();
   openSheet(`
     <div class="sheet-title">Export Chat</div>
-    <p class="hint">Choose a standard SillyTavern-compatible chat file, or include the saved Narrative Database and running summary for restoration in PocketTavern.</p>
+    <p class="hint">Choose a standard SillyTavern-compatible chat file, or include everything saved for this chat (Narrative Database, WEFT scenes, summary, Author's Note) for restoration in PocketTavern.</p>
     <div class="row wrap">
       <button class="btn" data-action="export-chat-standard">Export Chat</button>
-      <button class="btn primary" data-action="export-chat-memory">Export with Summary Data</button>
+      <button class="btn primary" data-action="export-chat-memory">Export with Memory Data</button>
     </div>
     <p class="hint">Both files use JSONL. Other apps may ignore the extra PocketTavern metadata.</p>
   `);
