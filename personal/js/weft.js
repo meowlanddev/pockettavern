@@ -277,3 +277,11 @@ export function applyEdit(scene, { summary, factsText, relationshipsText }) {
   if (!text) throw new Error('A scene needs a summary.');
   return { ...scene, summary: text, facts: parseFactLines(factsText), relationships: parseRelationshipLines(relationshipsText), edited: true, editedAt: Date.now() };
 }
+
+/** The part of a chat's WEFT data that is still true for a branch holding the first `count` messages. */
+export function branchWeft(weft, count) {
+  if (!weft?.scenes?.length) return null;
+  const scenes = weft.scenes.filter(s => s.to <= count).map(s => structuredClone(s));
+  if (!scenes.length) return null;
+  return { version: weft.version || 1, scenes, review: weft.review ? structuredClone(weft.review) : undefined, updatedAt: Date.now(), branchedAt: count };
+}

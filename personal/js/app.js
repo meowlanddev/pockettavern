@@ -22,7 +22,7 @@ import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.37)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.38)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -795,6 +795,20 @@ function ndbManualHtml(chat, cfg, prog) {
     <p class="hint">Only saving advances the automatic checkpoint. Replacing discards later summaries built on the incorrect record; chat messages are never changed.</p>
     <hr><button class="btn danger" data-action="ndb-clear" ${prog ? 'disabled' : ''}>Clear Existing Summary & Checkpoints</button>
   `;
+}
+/** Chat-menu shortcut: build scenes for the newest messages (only shown when WEFT is selected and there is enough new chat). */
+function weftCatchupInfo(chat = S.chat) {
+  const cfg = S.settings.ext.weft;
+  if (!chat?.weft?.scenes?.length) return null;
+  const usable = INJ.usableScenes(chat.messages, chat.weft.scenes);
+  const est = WEFT.estimateBackfill(chat.messages, usable.length ? usable[usable.length - 1].to : 0, cfg);
+  return { scenes: est.scenes, messages: est.messages, calls: est.calls, minutes: est.minutes };
+}
+function weftCatchupHtml() {
+  if (!S.settings.ext.weft.enabled || S.weftRun) return '';
+  const info = weftCatchupInfo();
+  if (!info || !info.scenes) return '';
+  return `<button data-action="weft-catchup">${ICONS.refresh}<span>WEFT catch up (${info.messages} new msgs)</span></button>`;
 }
 function weftSheet() {
   const chat = S.chat;
@@ -3409,6 +3423,7 @@ function quickActions() {
       ${S.settings.ext.enhance.enabled ? `<button data-action="enhance">✨<span>Enhance draft</span></button>` : ''}
       ${S.enhanceOriginal && S.enhanceOriginal.chatId === S.chat.id ? `<button data-action="restore-draft">${ICONS.back}<span>Restore draft</span></button>` : ''}
       ${activeMemoryToolsHtml()}
+      ${weftCatchupHtml()}
       <button data-action="view-prompt">${ICONS.eye}<span>View prompt</span></button>
     </div>
     ${S.group ? `
@@ -3446,6 +3461,8 @@ function weftStatusRows(chat, wf, promptMessages, stats) {
   else rows.push({ name: 'WEFT memory block', ok: null, detail: 'nothing needed for this reply (no pins, and nobody or nothing matched).' });
   for (const it of wf.items) rows.push({ name: `· ${it.kind === 'pin' ? 'Pins' : it.kind === 'scene' ? it.label : it.label}`, ok: null, detail: `${it.reason} (≈${it.tokens})` });
   for (const sk of wf.skipped) rows.push({ name: `· ${sk.label}`, ok: null, detail: `left out: ${sk.reason}` });
+  const behind = weftCatchupInfo(chat);
+  if (behind && behind.scenes) rows.push({ name: 'WEFT catch up', ok: null, detail: `${behind.messages} messages after your newest scene are sent word-for-word. Chat menu → WEFT catch up builds ~${behind.scenes} more scene${behind.scenes === 1 ? '' : 's'} (~${behind.calls} calls${behind.minutes ? `, ~${behind.minutes} min` : ''}).` });
   if (stats.included < total - wf.covered) rows.push({ name: 'WEFT gap', ok: false, detail: `only the last ${stats.included} messages fit, but ${total - wf.covered} come after your newest scene, so some of them are missing from the prompt. Build new scenes (Settings → WEFT scene memory) or raise Context size.` });
   return rows;
 }
@@ -4165,6 +4182,8 @@ function renderSettingsView(open) {
       <label class="field inline"><span class="label">Budget minimum<span class="hint">tokens, not counting pins</span></span><input inputmode="numeric" data-ext-weft="injectMin" value="${S.settings.ext.weft.injectMin}"></label>
       <label class="field inline"><span class="label">Budget maximum<span class="hint">tokens, not counting pins</span></span><input inputmode="numeric" data-ext-weft="injectMax" value="${S.settings.ext.weft.injectMax}"></label>
       <label class="field inline"><span class="label">Recent messages kept word-for-word<span class="hint">estimated tokens before the newest scene ends</span></span><input inputmode="numeric" data-ext-weft="injectRecentTokens" value="${S.settings.ext.weft.injectRecentTokens}"></label>
+      <label class="toggle"><span><span class="label">Send “where things stand”</span><span class="hint">A short list of current-status notes (injuries, locations, plans) from the newest scenes</span></span><input type="checkbox" data-ext-weft-toggle="injectState" ${S.settings.ext.weft.injectState !== false ? 'checked' : ''}><i></i></label>
+      <label class="field inline"><span class="label">Status notes at most</span><input inputmode="numeric" data-ext-weft="injectStateFacts" value="${S.settings.ext.weft.injectStateFacts}"></label>
       <label class="field inline"><span class="label">Who counts as “in play”<span class="hint">look at this many recent messages</span></span><input inputmode="numeric" data-ext-weft="injectWindow" value="${S.settings.ext.weft.injectWindow}"></label>
       <label class="field inline"><span class="label">Facts per person or place<span class="hint">most shown at once</span></span><input inputmode="numeric" data-ext-weft="injectFacts" value="${S.settings.ext.weft.injectFacts}"></label>
       <label class="field inline"><span class="label">Main character share<span class="hint">named in at least this share of scenes (0 to 1): only facts that match the latest messages are sent</span></span><input inputmode="decimal" data-ext-weft="injectMainShare" value="${S.settings.ext.weft.injectMainShare}"></label>
@@ -5122,6 +5141,7 @@ const actions = {
   'qa-database': openDatabaseManager,
   'weft-open': () => { if (!S.chat) return toast('Open a chat first; scenes are stored per chat.', 5000); weftSheet(); },
   'weft-build': () => runWeft(),
+  'weft-catchup': () => { closeSheet(); runWeft(); },
   'weft-stop': () => { if (S.weftRun) { S.weftRun.stop = true; toast('Stopping after the current call…'); } },
   'weft-edit-save': async (el) => {
     if (S.weftRun) return toast('Stop the build before editing scenes.');
@@ -5448,8 +5468,10 @@ const actions = {
       messages: structuredClone(S.chat.messages.slice(0, i + 1)).map((m) => ({ ...m, id: db.uid() })),
       ...(S.chat.mem ? { mem: structuredClone(S.chat.mem) } : {}),
     };
+    const bw = WEFT.branchWeft(S.chat.weft, i + 1); // WEFT scenes that end at or before this message come along
+    if (bw) chat.weft = bw;
     await saveChat(chat);
-    toast('Branched into a new chat');
+    toast(bw ? `Branched into a new chat (kept ${bw.scenes.length} WEFT scene${bw.scenes.length === 1 ? '' : 's'})` : 'Branched into a new chat');
     go(`#/chat/${S.char.id}/${chat.id}`);
   },
   'chat-menu': chatMenu,
@@ -5862,7 +5884,7 @@ document.addEventListener('input', (e) => {
     saveSettings();
   } else if (el.dataset.extWeft) {
     const k = el.dataset.extWeft;
-    S.settings.ext.weft[k] = ['minSceneTokens','targetSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec','injectMin','injectMax','injectRecentTokens','injectWindow','injectFacts','injectMainShare','injectScenes','injectSceneHits','injectSceneShare','injectDepth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
+    S.settings.ext.weft[k] = ['minSceneTokens','targetSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec','injectMin','injectMax','injectRecentTokens','injectWindow','injectFacts','injectStateFacts','injectMainShare','injectScenes','injectSceneHits','injectSceneShare','injectDepth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
     saveSettings();
   } else if (el.dataset.extMem) {
     const k = el.dataset.extMem;

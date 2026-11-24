@@ -16,6 +16,8 @@ export const DEFAULT_INJECT = Object.freeze({
   injectScenes: 2,        // most past scenes recalled at once
   injectSceneShare: 0.25, // names found in more than this share of scenes don't count toward recalling a scene
   injectSceneHits: 2,     // how many of a scene's names the recent messages must mention to recall it
+  injectState: true,      // short "where things stand" list from the newest scene's temporary facts
+  injectStateFacts: 6,    // most facts in that list
   injectTrim: true,       // drop already-summarised messages from the prompt (false = keep full history and just add the memory block)
   injectPosition: 'chat', // 'chat' | 'prompt' | 'before'
   injectDepth: 4,
@@ -179,13 +181,33 @@ export function buildInjection({ messages, scenes, archive, cfg = {} }) {
     items.push({ kind: 'pin', label: `${pins.length} pinned fact${pins.length === 1 ? '' : 's'}`, reason: 'pinned by you, always sent', tokens: pinTok });
   }
 
+  // 2a. where things stand: temporary facts first recorded in the newest scene or the one before (injuries, locations, plans)
+  const stateBlocks = [];
+  if (c.injectState !== false && Number(c.injectStateFacts) !== 0) {
+    const recentIds = new Set(ok.slice(-2).map((x) => x.id));
+    const rows = [];
+    for (const e of entities) {
+      for (const g of e.groups) {
+        if (!isLive(g) || g.pin === 'yes' || g.durability !== 'temporary') continue;
+        const last = g.scenes[g.scenes.length - 1];
+        if (recentIds.has(last.id)) rows.push({ e, g, at: last.from });
+      }
+    }
+    rows.sort((a, b) => b.at - a.at);
+    for (const r of rows.slice(0, Math.max(1, Number(c.injectStateFacts) || 6))) {
+      const line = `- ${r.e.name}: ${clean(r.g.text)}`;
+      stateBlocks.push({ key: r.g.key, label: r.e.name, line, tokens: tok(line) });
+    }
+  }
+  const stateKeys = new Set(stateBlocks.map((b) => b.key));
+
   // 2. people/places named in the last few messages (main characters only when something specific matches)
   const total = ok.length;
   const entryBlocks = [];
   const pinned = new Set(pins.map((p) => p.key));
   const queryWords = new Set(words(query));
   for (const { entity: e, at } of mentioned(entities, recent)) {
-    const facts = e.groups.filter((g) => isLive(g) && !pinned.has(g.key));
+    const facts = e.groups.filter((g) => isLive(g) && !pinned.has(g.key) && !stateKeys.has(g.key));
     if (!facts.length) continue;
     const own = new Set(nameTokens([e.name, ...(e.aliases || [])].join(' ')));
     const overlap = (g) => [...factTokens(g.text)].filter((w) => queryWords.has(w) && !own.has(w) && !STOP.has(w)).length;
@@ -213,12 +235,18 @@ export function buildInjection({ messages, scenes, archive, cfg = {} }) {
   });
 
   // 4. fit the budget: scenes go first (weakest first), then entries (least recently named first). Pins stay.
-  let spend = [...entryBlocks, ...sceneBlocks].reduce((s, b) => s + b.tokens, 0);
+  let spend = [...stateBlocks, ...entryBlocks, ...sceneBlocks].reduce((s, b) => s + b.tokens, 0);
   const drop = (arr, label) => { const b = arr.pop(); spend -= b.tokens; skipped.push({ label: b.label, reason: label }); };
   while (spend > budget && sceneBlocks.length) drop(sceneBlocks, 'over budget');
   while (spend > budget && entryBlocks.length > 1) drop(entryBlocks, 'over budget');
-  if (spend > budget && entryBlocks.length === 1) { entryBlocks.length = 0; spend = 0; skipped.push({ label: 'entries', reason: 'over budget' }); }
+  if (spend > budget && entryBlocks.length === 1) { spend -= entryBlocks.pop().tokens; skipped.push({ label: 'entries', reason: 'over budget' }); }
+  while (spend > budget && stateBlocks.length > 2) drop(stateBlocks, 'over budget');
 
+  if (stateBlocks.length) {
+    lines.push(`Where things stood at the end of the last recorded scene (messages ${ok[ok.length - 1].from}-${covered}):`);
+    for (const b of stateBlocks) lines.push(b.line);
+    items.push({ kind: 'state', label: `${stateBlocks.length} recent status note${stateBlocks.length === 1 ? '' : 's'}`, reason: 'temporary facts from the newest scenes', tokens: stateBlocks.reduce((t, b) => t + b.tokens, 0) });
+  }
   if (entryBlocks.length) { lines.push('Who and what is in play:'); for (const b of entryBlocks) { lines.push(b.line); items.push({ kind: 'entry', label: b.label, reason: b.reason, tokens: b.tokens }); } }
   if (sceneBlocks.length) { lines.push('Earlier scenes that connect to this moment:'); for (const b of sceneBlocks) { lines.push(`- ${b.line}`); items.push({ kind: 'scene', label: b.label, reason: b.reason, tokens: b.tokens }); } }
 

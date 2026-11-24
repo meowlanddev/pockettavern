@@ -158,4 +158,14 @@ const est = W.estimateBackfill(all, 0, { ...opts, callIntervalSec: 21 });
 assert.equal(est.minutes, Math.ceil(est.calls * 21 / 60));
 assert.ok(est.scenes >= 1 && est.calls === est.scenes * 2 && est.inputTokens > est.tokens);
 assert.equal(W.estimateBackfill(mk(3), 0, opts).scenes, 0);
+// branches keep only the scenes that end at or before the branch point
+{
+  const w = { version: 1, scenes: [{ id: 's1-10', from: 1, to: 10 }, { id: 's11-20', from: 11, to: 20 }, { id: 's21-30', from: 21, to: 30 }], review: { facts: { k: { pin: 'yes' } }, links: [], proposals: [] } };
+  const b = W.branchWeft(w, 25);
+  assert.deepEqual(b.scenes.map(x => x.id), ['s1-10', 's11-20']);
+  assert.deepEqual(b.review.facts.k, { pin: 'yes' });
+  b.scenes[0].id = 'changed'; assert.equal(w.scenes[0].id, 's1-10'); // a copy, not shared
+  assert.equal(W.branchWeft(w, 5), null);
+  assert.equal(W.branchWeft(null, 5), null);
+}
 console.log('weft tests passed');
