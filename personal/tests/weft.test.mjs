@@ -83,7 +83,7 @@ assert.equal(full.scenes[0].continues, false);
 assert.equal(full.scenes[1].continues, true);   // scene 2 hit the max size
 assert.ok(seen.some(i => i.includes('still going after this passage ends')));
 assert.ok(seen.some(i => i.includes('continues the previous one')));   // the part after a forced cut
-assert.ok(seen[0].includes('about 150 words'));
+assert.ok(seen[0].includes('under 150 words'));
 // stop after one scene, then resume: same scene boundaries as an uninterrupted run
 let n = 0;
 const part = await W.runBackfill({ ...base, scenes: [], shouldStop: () => n >= 1, onScene: () => { n++; } });
@@ -124,6 +124,14 @@ await assert.rejects(() => W.runBackfill({ ...base, scenes: [], summarize: async
   const r = await W.runBackfill({ messages: mk(80), scenes: [], opts, speaker, askBoundary: t => p3(() => boundary(t)), summarize: i => p3(() => summarize(i)), shouldStop: () => stop2 });
   assert.ok(r.scenes.length <= 1);
 }
+
+// --- invisible characters are stripped from model output, source text and existing records
+const zw = '\u200b\u200d\u2060\ufeff';
+const pz = W.parseSceneOutput(`SUMMARY: Clean text.${zw.repeat(10)}\nNAMES: A${zw}, B\nFACTS:\n- A | durable | likes tea${zw}`);
+assert.equal(pz.summary, 'Clean text.'); assert.deepEqual(pz.names, ['A', 'B']); assert.equal(pz.facts[0].text, 'likes tea');
+const cl = W.cleanScenes([{ ...W.makeScene(mk(4), 1, 4, p), summary: 'Hi' + zw }]);
+assert.equal(cl.changed, true); assert.equal(cl.scenes[0].summary, 'Hi');
+assert.equal(W.cleanScenes(cl.scenes).changed, false);
 
 // --- record length scales with scene size
 assert.equal(W.recordWords(3000), 150);

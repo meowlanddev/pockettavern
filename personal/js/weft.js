@@ -13,20 +13,20 @@ Most passages contain few breaks, and many contain none. Reply with ONLY a JSON 
 
 export const SCENE_PROMPT = `You write one permanent memory record for a roleplay scene, so the story can be recalled accurately later.
 Rules:
-- Past tense, third person, plain and factual. The input states how long the record should be; follow that. If a note says the scene continues past this passage, describe only this passage and do not conclude or wrap up the scene. If a note says this passage continues the previous one, do not re-introduce the setting or characters.
+- Past tense, third person, plain and factual. The input gives a maximum length; stay under it, in two or three short paragraphs. If a note says the scene continues past this passage, describe only this passage and do not conclude or wrap up the scene. If a note says this passage continues the previous one, do not re-introduce the setting or characters.
 - Record only what actually happened or was stated in this scene: who was where, what was done, said, decided, learned, or changed. Keep exact names, places, numbers, objects, injuries and times as written.
 - Do NOT invent, guess, or interpret motives. Do NOT add open threats, unresolved questions, predictions, or what might happen next. Describe the scene's end state only.
-- Do not copy long passages of dialogue.
+- Do not narrate blow by blow and do not copy long passages of dialogue. For sex, violence or other intense moments, say in one plain sentence what happened and keep only what matters later (who, consent, protection, injuries, anything said that changed the relationship). No graphic or anatomical detail.
 Reply in exactly this format:
 SUMMARY: <the record>
 NAMES: <comma-separated people, places and notable objects that appear>
-FACTS: <one per line, formatted "- Name | durable or temporary | fact". Every fact this scene newly established or changed about a person, place, object or group, using the exact name as written in the story. "durable" = stays true (home, job, family, history, rules of the world). "temporary" = will change (injuries, current location, mood, who is present, plans). Write "- none" if nothing.>
+FACTS: <at most 12 lines, formatted "- Name | durable or temporary | fact". Only facts likely to matter many scenes later: identity, family, home and addresses, job, injuries and medical status, legal status, important possessions, secrets and who knows them, promises. Skip meals, clothing, times of day, weather and moment-to-moment actions. Use the exact name as written in the story. "durable" = stays true long-term (home, job, family, history, rules of the world). "temporary" = will change (an injury, a plan, where someone is right now). Write "- none" if nothing.>
 RELATIONSHIPS: <one per line, formatted "- A & B | what changed between them". Only if their relationship meaningfully changed (trust, closeness, conflict, a promise). Write "- none" if nothing.>`;
 
 export const DEFAULT_WEFT_SETTINGS = Object.freeze({
   enabled: false,
   model: '',
-  v: 3, // bump to replace saved prompts/sizes with new defaults on next load
+  v: 4, // bump to replace saved prompts/sizes with new defaults on next load
   minSceneTokens: 4000,
   targetSceneTokens: 15000,
   maxSceneTokens: 30000,
@@ -35,6 +35,19 @@ export const DEFAULT_WEFT_SETTINGS = Object.freeze({
   boundaryPrompt: BOUNDARY_PROMPT,
   scenePrompt: SCENE_PROMPT,
 });
+
+// Some models append runs of zero-width characters (a hidden watermark); they waste tokens and clutter records.
+const INVISIBLE = /[\u200b-\u200f\u2060\ufeff\u202a-\u202e]/g;
+export const stripInvisible = s => String(s ?? '').replace(INVISIBLE, '');
+export function cleanScenes(scenes) {
+  let changed = false;
+  const fix = x => { const y = stripInvisible(x); if (y !== x) changed = true; return y.trim(); };
+  const out = (scenes || []).map(sc => ({ ...sc,
+    summary: fix(sc.summary), names: (sc.names || []).map(fix),
+    facts: (sc.facts || []).map(f => ({ ...f, name: fix(f.name), text: fix(f.text) })),
+    relationships: (sc.relationships || []).map(r => ({ ...r, who: fix(r.who), text: fix(r.text) })) }));
+  return { scenes: out, changed };
+}
 
 const tok = m => (m.hidden || !messageText(m).trim() ? 0 : estimateTokens(messageText(m)) + 4);
 
@@ -136,7 +149,7 @@ export function parseRelationshipLines(text) {
 export const formatRelationshipLines = rels => (rels || []).map(r => `${r.who || ''} | ${r.text}`).join('\n');
 
 export function parseSceneOutput(raw) {
-  const sec = sections(String(raw || '').replace(/\r/g, ''));
+  const sec = sections(stripInvisible(raw).replace(/\r/g, ''));
   const summary = (sec.SUMMARY || '').trim();
   if (!summary) return null;
   return {
@@ -155,9 +168,9 @@ export function buildSceneInput(messages, from, to, speaker, previousSummary = '
   for (let i = from - 1; i < to; i++) {
     const m = messages[i];
     if (m.hidden || !messageText(m).trim()) continue;
-    body.push(`${speaker(m)}: ${messageText(m)}`);
+    body.push(`${speaker(m)}: ${stripInvisible(messageText(m))}`);
   }
-  const notes = [`Write the record in about ${recordWords(tokens)} words.`];
+  const notes = [`Keep the record under ${recordWords(tokens)} words.`];
   if (continued) notes.push('This passage continues the previous one: the same scene is still going.');
   if (continues) notes.push('The scene is still going after this passage ends: describe only this passage, do not conclude it.');
   return `${previousSummary ? `<previous_scene_for_context_only>\n${previousSummary}\n</previous_scene_for_context_only>\n\n` : ''}<note>${notes.join(' ')}</note>\n\n<scene messages="${from}-${to}">\n${body.join('\n\n')}\n</scene>`;
@@ -254,7 +267,7 @@ export function makePacer({ intervalMs = 0, retries = 4, backoffMs = 30000, slee
 
 // Hand edit of a scene record. Edited scenes are flagged so nothing regenerates over them.
 export function applyEdit(scene, { summary, factsText, relationshipsText }) {
-  const text = String(summary || '').trim();
+  const text = stripInvisible(summary).trim();
   if (!text) throw new Error('A scene needs a summary.');
   return { ...scene, summary: text, facts: parseFactLines(factsText), relationships: parseRelationshipLines(relationshipsText), edited: true, editedAt: Date.now() };
 }

@@ -20,7 +20,7 @@ import * as WEFT from './weft.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.31)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.32)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -784,7 +784,11 @@ function weftSheet() {
   const chat = S.chat;
   if (!chat) return;
   const cfg = S.settings.ext.weft;
-  const scenes = chat.weft?.scenes || [];
+  let scenes = chat.weft?.scenes || [];
+  if (scenes.length && !S.weftRun) { // one-time cleanup of invisible characters in older records
+    const cleaned = WEFT.cleanScenes(scenes);
+    if (cleaned.changed) { chat.weft.scenes = scenes = cleaned.scenes; saveChat(chat); }
+  }
   const run = S.weftRun && S.weftRun.chatId === chat.id ? S.weftRun : null;
   const stale = new Set(WEFT.staleScenes(chat.messages, scenes));
   const start = WEFT.nextStart(scenes);
