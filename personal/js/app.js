@@ -14,10 +14,11 @@ import { runScript, COMMANDS } from './stscript.js';
 import { DEFAULT_ENHANCE_SETTINGS, ENHANCE_TOGGLES, buildEnhancementPrompt, normalizeGeneratedText, DEFAULT_SUMMARIZE_SETTINGS } from './enhance.js';
 import * as MEM from './memory.js';
 import * as NDB from './narrative-db.js';
+import { memoryStatus } from './memory-status.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.25)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.26)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -3210,11 +3211,19 @@ function authorsNoteSheet() {
 function viewPrompt() {
   const history = S.chat.messages;
   const { messages, stats } = promptFor({ ...S.chat, vars: { ...(S.chat.vars || {}) } }, S.char, history);
+  // Which saved memory pieces actually made it into this prompt, and why not if they didn't.
+  const memRows = memoryStatus({
+    chat: S.chat, dbEnabled: !!S.settings.ext.database.enabled, messages,
+    stale: NDB.isStale(S.chat.messages, S.chat.narrativeDb),
+  });
+  const memHtml = memRows.length ? `<div class="pv-mem">${memRows.map((r) =>
+    `<p class="${r.ok === false ? 'banner warn' : 'muted small'}">${r.ok === true ? '✓' : r.ok === false ? '✗' : '•'} <b>${esc(r.name)}</b>: ${esc(r.detail)}</p>`).join('')}</div>` : '';
   openSheet(`
     <div class="sheet-title">Prompt preview</div>
     <p class="muted small">Preset: <b>${esc(stats.preset)}</b>. ≈${stats.system} tokens of prompts/character info, ≈${stats.history} tokens of chat history.
       ${stats.included}/${stats.total} messages fit in the ${S.settings.preset.context_size}-token context.
       ${stats.worldInfo ? `${stats.worldInfo} lorebook entr${stats.worldInfo === 1 ? 'y' : 'ies'} active (≈${stats.worldInfoTokens} tokens).` : ''}</p>
+    ${memHtml}
     ${stats.total > 3 && stats.included < Math.min(stats.total, 6) ? `<p class="banner warn">The AI can only see the last ${stats.included} message${stats.included === 1 ? '' : 's'}. Older ones are cut to fit the ${S.settings.preset.context_size}-token context (≈${stats.reply} more are kept free for the reply). Raise <b>Context size</b> in Settings → Generation, use shorter replies, or turn off lorebooks you don't need.</p>` : ''}
     ${stats.worldInfoList && stats.worldInfoList.length ? `<details class="pv-lore"><summary class="muted small">Lorebook entries sent (${stats.worldInfoList.length})</summary><ul class="small">${stats.worldInfoList.map((e) => `<li>${esc(e.name)} <span class="muted">≈${e.tokens}</span></li>`).join('')}</ul></details>` : ''}
     ${messages.map((m) => `<div class="pv"><div class="pv-role">${m.role}</div><pre>${esc(m.content)}</pre></div>`).join('')}
@@ -3248,6 +3257,7 @@ function exportChat(includeMemory = false) {
       messageCount: chat.messages.length,
       messageFingerprint: portableChatFingerprint(chat.messages),
       ...(chat.narrativeDb?.text ? { narrativeDb: structuredClone(chat.narrativeDb) } : {}),
+      ...(chat.narrativeDb?.text && chat.narrativeDbManualOnly ? { narrativeDbManualOnly: true } : {}),
       ...(chat.summary?.text ? { summary: structuredClone(chat.summary) } : {}),
       ...(chat.authorsNote?.text ? { authorsNote: structuredClone(chat.authorsNote) } : {}),
     };
@@ -3300,6 +3310,8 @@ function restoreExportedChatMemory(chat, md) {
         signature: NDB.fingerprint(chat.messages, covered),
         at: Number(src.at) || Date.now(),
       };
+      // Keep "Manual only" across export/import so a restored hand-written summary is not auto-rewritten.
+      if (bundle.narrativeDbManualOnly === true) chat.narrativeDbManualOnly = true;
     }
   }
   const summary = bundle.summary;
