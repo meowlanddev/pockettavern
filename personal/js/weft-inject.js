@@ -11,6 +11,7 @@ export const DEFAULT_INJECT = Object.freeze({
   injectMax: 4000,        // budget ceiling; the budget grows with the length of the chat
   injectRecentTokens: 8000, // newest already-summarised messages still sent word-for-word
   injectWindow: 3,        // how many recent messages decide who/what is "in play"
+  injectRelations: 4,     // most relationship notes per pair (the first one, in full, plus the newest ones, shortened)
   injectFacts: 6,         // most facts shown per person/place
   injectMainShare: 0.6,   // a name in at least this share of scenes counts as a main character
   injectScenes: 2,        // most past scenes recalled at once
@@ -29,6 +30,7 @@ const STOP = new Set('new a an and are as at be but by for from had has have he 
 
 const words = (s) => String(s || '').toLowerCase().replace(/<[^>]+>/g, ' ').split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2 && !STOP.has(w));
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+const shorten = (t, n) => { const x = clean(t); if (x.length <= n) return x; const cut = x.slice(0, n); return cut.slice(0, Math.max(cut.lastIndexOf(' '), n * 0.6)).replace(/[,;:\s]+$/, '') + '…'; };
 const tok = (s) => estimateTokens(s) + 2;
 
 /** How many tokens the memory block may use (not counting pins). Grows with the chat, clamped. */
@@ -86,6 +88,7 @@ const isLive = (g) => !g.deleted && !g.hidden && g.status === 'current';
 function sceneShare(e, total) {
   const ids = new Set();
   for (const g of e.groups) for (const s of g.scenes) ids.add(s.id);
+  for (const r of e.relationships || []) for (const it of r.items) ids.add(`s${it.from}-${it.to}`);
   return total ? ids.size / total : 0;
 }
 
@@ -227,6 +230,29 @@ export function buildInjection({ messages, scenes, archive, cfg = {} }) {
     entryBlocks.push({ kind: 'entry', label: e.name, reason, line, tokens: tok(line) });
   }
 
+  // 2b. how the people in play stand with each other, in order. Always sent for two main characters,
+  // otherwise only when both are named. This is what keeps "have they slept together", "who knows what" etc. alive.
+  const relBlocks = [];
+  const maxRel = Number.isFinite(Number(c.injectRelations)) ? Number(c.injectRelations) : 4;
+  if (maxRel > 0) {
+    const named = new Set(mentioned(entities, recent).map((m) => m.entity.id));
+    const play = new Set(entities.filter((e) => e.id !== 'unassigned' && (named.has(e.id) || (total >= 5 && sceneShare(e, total) >= (Number(c.injectMainShare) || 0.6)))).map((e) => e.id));
+    const done = new Set();
+    for (const e of entities) {
+      if (!play.has(e.id)) continue;
+      for (const r of e.relationships) {
+        const other = entities.find((x) => x.name === r.with);
+        if (!other || !play.has(other.id) || other.id === e.id) continue;
+        const pair = [e.id, other.id].sort().join('|');
+        if (done.has(pair)) continue;
+        done.add(pair);
+        const items = r.items.length <= maxRel ? r.items : [r.items[0], ...r.items.slice(-(maxRel - 1))];
+        const lines2 = items.map((it, i) => `- (messages ${it.from}-${it.to}) ${i === 0 ? clean(it.text) : shorten(it.text, 170)}`);
+        relBlocks.push({ label: `${e.name} & ${other.name}`, head: `${e.name} and ${other.name}, in order:`, lines: lines2, tokens: tok(lines2.join('\n')) + 12, items });
+      }
+    }
+  }
+
   // 3. past scenes that match what is happening now (not ones still visible word-for-word)
   const hits = matchScenes(ok, query, { max: Math.max(0, Number(c.injectScenes) || 0), skipFrom: verbatimFrom, share: Number(c.injectSceneShare) || 0.25, hits: Math.max(1, Number(c.injectSceneHits) || 2) });
   const sceneBlocks = hits.map((h) => {
@@ -235,17 +261,22 @@ export function buildInjection({ messages, scenes, archive, cfg = {} }) {
   });
 
   // 4. fit the budget: scenes go first (weakest first), then entries (least recently named first). Pins stay.
-  let spend = [...stateBlocks, ...entryBlocks, ...sceneBlocks].reduce((s, b) => s + b.tokens, 0);
+  let spend = [...stateBlocks, ...relBlocks, ...entryBlocks, ...sceneBlocks].reduce((s, b) => s + b.tokens, 0);
   const drop = (arr, label) => { const b = arr.pop(); spend -= b.tokens; skipped.push({ label: b.label, reason: label }); };
   while (spend > budget && sceneBlocks.length) drop(sceneBlocks, 'over budget');
   while (spend > budget && entryBlocks.length > 1) drop(entryBlocks, 'over budget');
   if (spend > budget && entryBlocks.length === 1) { spend -= entryBlocks.pop().tokens; skipped.push({ label: 'entries', reason: 'over budget' }); }
+  while (spend > budget && relBlocks.length) drop(relBlocks, 'over budget');
   while (spend > budget && stateBlocks.length > 2) drop(stateBlocks, 'over budget');
 
   if (stateBlocks.length) {
     lines.push(`Where things stood at the end of the last recorded scene (messages ${ok[ok.length - 1].from}-${covered}):`);
     for (const b of stateBlocks) lines.push(b.line);
     items.push({ kind: 'state', label: `${stateBlocks.length} recent status note${stateBlocks.length === 1 ? '' : 's'}`, reason: 'temporary facts from the newest scenes', tokens: stateBlocks.reduce((t, b) => t + b.tokens, 0) });
+  }
+  if (relBlocks.length) {
+    lines.push('How people stand with each other (what has happened between them so far):');
+    for (const b of relBlocks) { lines.push(b.head, ...b.lines); items.push({ kind: 'relation', label: b.label, reason: `${b.items.length} relationship note${b.items.length === 1 ? '' : 's'}, both in play`, tokens: b.tokens }); }
   }
   if (entryBlocks.length) { lines.push('Who and what is in play:'); for (const b of entryBlocks) { lines.push(b.line); items.push({ kind: 'entry', label: b.label, reason: b.reason, tokens: b.tokens }); } }
   if (sceneBlocks.length) { lines.push('Earlier scenes that connect to this moment:'); for (const b of sceneBlocks) { lines.push(`- ${b.line}`); items.push({ kind: 'scene', label: b.label, reason: b.reason, tokens: b.tokens }); } }

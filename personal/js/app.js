@@ -22,7 +22,7 @@ import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.40)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.41)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -4188,6 +4188,7 @@ function renderSettingsView(open) {
       <label class="field inline"><span class="label">Recent messages kept word-for-word<span class="hint">estimated tokens before the newest scene ends</span></span><input inputmode="numeric" data-ext-weft="injectRecentTokens" value="${S.settings.ext.weft.injectRecentTokens}"></label>
       <label class="toggle"><span><span class="label">Send “where things stand”</span><span class="hint">A short list of current-status notes (injuries, locations, plans) from the newest scenes</span></span><input type="checkbox" data-ext-weft-toggle="injectState" ${S.settings.ext.weft.injectState !== false ? 'checked' : ''}><i></i></label>
       <label class="field inline"><span class="label">Status notes at most</span><input inputmode="numeric" data-ext-weft="injectStateFacts" value="${S.settings.ext.weft.injectStateFacts}"></label>
+      <label class="field inline"><span class="label">Relationship notes per pair<span class="hint">sent for main characters and for anyone named together; 0 turns off</span></span><input inputmode="numeric" data-ext-weft="injectRelations" value="${S.settings.ext.weft.injectRelations}"></label>
       <label class="field inline"><span class="label">Who counts as “in play”<span class="hint">look at this many recent messages</span></span><input inputmode="numeric" data-ext-weft="injectWindow" value="${S.settings.ext.weft.injectWindow}"></label>
       <label class="field inline"><span class="label">Facts per person or place<span class="hint">most shown at once</span></span><input inputmode="numeric" data-ext-weft="injectFacts" value="${S.settings.ext.weft.injectFacts}"></label>
       <label class="field inline"><span class="label">Main character share<span class="hint">named in at least this share of scenes (0 to 1): only facts that match the latest messages are sent</span></span><input inputmode="decimal" data-ext-weft="injectMainShare" value="${S.settings.ext.weft.injectMainShare}"></label>
@@ -5897,7 +5898,7 @@ document.addEventListener('input', (e) => {
     saveSettings();
   } else if (el.dataset.extWeft) {
     const k = el.dataset.extWeft;
-    S.settings.ext.weft[k] = ['minSceneTokens','targetSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec','injectMin','injectMax','injectRecentTokens','injectWindow','injectFacts','injectStateFacts','injectMainShare','injectScenes','injectSceneHits','injectSceneShare','injectDepth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
+    S.settings.ext.weft[k] = ['minSceneTokens','targetSceneTokens','maxSceneTokens','maxOutputTokens','callIntervalSec','injectMin','injectMax','injectRecentTokens','injectWindow','injectFacts','injectRelations','injectStateFacts','injectMainShare','injectScenes','injectSceneHits','injectSceneShare','injectDepth'].includes(k) ? (numOrNull(el.value) ?? S.settings.ext.weft[k]) : el.value;
     saveSettings();
   } else if (el.dataset.extMem) {
     const k = el.dataset.extMem;

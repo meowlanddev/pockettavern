@@ -132,5 +132,19 @@ const st2 = buildInjection({ messages: rach, scenes, archive: archive() });
 assert.equal(st2.text.split('brace on the left ankle').length - 1, 1);
 // can be switched off
 assert.ok(!buildInjection({ messages, scenes, archive: archive(), cfg: { injectState: false } }).items.some((i) => i.kind === 'state'));
+// relationship notes: two main characters always, first note in full, later ones shortened, newest kept
+{
+  const rel = (n, text) => ({ who: 'Rachel & Sam', text });
+  const rs = scenes.map((sc, i) => ({ ...sc, names: [...sc.names, 'Sam'], facts: [], relationships: [rel(i, i === 0 ? 'became lovers on the first night' : 'note ' + i + ' ' + 'x '.repeat(150))] }));
+  const ra = buildArchive(rs, newReview());
+  const r = buildInjection({ messages, scenes: rs, archive: ra, cfg: { injectState: false, injectMainShare: 0.5 } });
+  assert.match(r.text, /How people stand with each other/);
+  assert.match(r.text, /\(messages 1-10\) became lovers on the first night/);
+  assert.match(r.text, /\(messages 51-60\) note 5/); // newest kept
+  assert.ok(!/\(messages 11-20\)/.test(r.text)); // middle ones dropped (4 max)
+  assert.ok(/…/.test(r.text)); // shortened
+  assert.ok(r.items.some((i) => i.kind === 'relation'));
+  assert.ok(!buildInjection({ messages, scenes: rs, archive: ra, cfg: { injectState: false, injectMainShare: 0.5, injectRelations: 0 } }).items.some((i) => i.kind === 'relation'));
+}
 assert.deepEqual(Object.keys(DEFAULT_INJECT).filter((k) => !k.startsWith('inject')), []);
 console.log('weft-inject tests passed');
