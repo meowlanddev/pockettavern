@@ -2,9 +2,9 @@
 import assert from 'node:assert/strict';
 import { buildArchive, newReview, setFlag } from '../js/weft-archive.js';
 import { rangeFingerprint } from '../js/weft.js';
-import { budgetFor, usableScenes, mentioned, matchScenes, properWords, pinLines, pinTokens, buildInjection, DEFAULT_INJECT } from '../js/weft-inject.js';
+import { storyScenes, storyBudgetFor, dominantTheme, matchThemes, budgetFor, usableScenes, mentioned, matchScenes, properWords, pinLines, pinTokens, buildInjection, DEFAULT_INJECT } from '../js/weft-inject.js';
 
-const bi = (a) => buildInjection({ ...a, cfg: { injectState: false, ...(a.cfg || {}) } }); // state card has its own tests below
+const bi = (a) => buildInjection({ ...a, cfg: { injectState: false, injectStory: false, ...(a.cfg || {}) } }); // state card and story have their own tests below
 const msg = (role, text) => ({ role, swipes: [text], swipeIdx: 0 });
 const filler = 'The afternoon went on quietly while they talked about nothing in particular. ';
 
@@ -145,6 +145,42 @@ assert.ok(!buildInjection({ messages, scenes, archive: archive(), cfg: { injectS
   assert.ok(/…/.test(r.text)); // shortened
   assert.ok(r.items.some((i) => i.kind === 'relation'));
   assert.ok(!buildInjection({ messages, scenes: rs, archive: ra, cfg: { injectState: false, injectMainShare: 0.5, injectRelations: 0 } }).items.some((i) => i.kind === 'relation'));
+}
+// topic recall: same people in every scene, so recall by what the moment is about
+{
+  const lover = 'They kissed, undressed, and had sex in bed; sexual and intimate, naked skin, her mouth on his shoulder.';
+  const ts = scenes.map((sc, i) => ({ ...sc, summary: i === 1 ? lover + ' ' + lover : i === 3 ? lover : 'They talked about the schedule.' }));
+  const tq = 'He kissed her mouth and unbuttoned her shirt; her hips against his, naked skin, the bed, sex, lovers, intimate, desire, thighs.';
+  assert.equal(dominantTheme(tq).theme, 'intimacy');
+  assert.equal(dominantTheme('They talked about the schedule and the weather for a while.'), null);
+  assert.deepEqual(matchThemes(ts, tq, { max: 2, skipFrom: null }).map((x) => x.scene.from).sort((a, b) => a - b), [11, 31]);
+  const tm = messages.slice(); tm[59] = msg('user', tq);
+  const r = buildInjection({ messages: tm, scenes: ts, archive: buildArchive(ts, newReview()), cfg: { injectState: false, injectRecentTokens: 200 } });
+  assert.ok(r.items.some((i) => i.kind === 'scene' && i.label === 'Scene 11-20' && /intimate moments/.test(i.reason)));
+  assert.ok(!buildInjection({ messages: tm, scenes: ts, archive: buildArchive(ts, newReview()), cfg: { injectState: false, injectRecentTokens: 200, injectByTopic: false } }).items.some((i) => i.kind === 'scene'));
+}
+// story so far: scenes the people in play share, all of them, in order
+{
+  const ss = scenes.map((sc, i) => ({ ...sc, summary: `Scene ${i + 1}: ` + 'Rachel and Sam spent time together. '.repeat(3), names: ['Rachel', 'Sam'], facts: [{ name: 'Rachel', durability: 'durable', text: 'Rachel fact ' + i }, { name: 'Sam', durability: 'durable', text: 'Sam fact ' + i }],
+    relationships: [{ who: 'Rachel & Sam', text: 'rel ' + i }] }));
+  const sm = messages.slice(); sm[59] = msg('user', 'Sam looked at Rachel.');
+  const r = buildInjection({ messages: sm, scenes: ss, archive: buildArchive(ss, newReview()), cfg: { injectState: false, injectRecentTokens: 200 } });
+  assert.match(r.text, /The story so far, in order \(the scenes Rachel and Sam share\):/);
+  const order = [...r.text.matchAll(/- \(messages (\d+)-/g)].map((m) => +m[1]);
+  assert.deepEqual(order, [1, 11, 21, 31, 41]); // scene 6 (51-60) is still in the chat window; the rest all appear, oldest first
+  assert.ok(!/rel 0/.test(r.text), 'relationship notes are skipped when the full scenes are already there');
+  const it = r.items.find((x) => x.kind === 'story');
+  assert.ok(it && it.tokens > 0);
+  // a tight budget shortens older scenes but keeps the newest whole and the first one
+  const big = ss.map((sc) => ({ ...sc, summary: sc.summary + ' More about what happened. '.repeat(80) }));
+  const sc2 = storyScenes(buildArchive(big, newReview()).entities, big, new Set(buildArchive(big, newReview()).entities.map((e) => e.id)), { budget: 1500, skipFrom: null });
+  assert.ok(sc2.items.length >= 2 && sc2.items[0].scene.from === 1 && sc2.items.at(-1).short === false && sc2.items.some((x) => x.short));
+  assert.equal(sc2.complete, false);
+  // off
+  assert.ok(!buildInjection({ messages: sm, scenes: ss, archive: buildArchive(ss, newReview()), cfg: { injectState: false, injectStory: false, injectRecentTokens: 200 } }).items.some((x) => x.kind === 'story'));
+  assert.equal(storyBudgetFor(0), 2000);
+  assert.equal(storyBudgetFor(340000), 5580);
+  assert.equal(storyBudgetFor(5000000), 6000);
 }
 assert.deepEqual(Object.keys(DEFAULT_INJECT).filter((k) => !k.startsWith('inject')), []);
 console.log('weft-inject tests passed');
