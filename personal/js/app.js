@@ -22,7 +22,7 @@ import * as WA from './weft-archive.js';
 import { openZip, classify, readEntry, readText, readJson, baseName, parseStChat } from './stimport.js';
 import { CHAT_STYLES, AVATAR_SHAPES, THEMES, COLOR_FIELDS, DEFAULT_APPEARANCE, paletteOf, applyAppearance, importThemeFile, exportTheme } from './theme.js';
 
-const VERSION = '1.9.10 (UI + Narrative 0.9.43)';
+const VERSION = '1.9.10 (UI + Narrative 0.9.44)';
 const BUILD_NAME = 'PocketTavern';
 const DEFAULT_MAIN = "Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}. Write one reply only, in an immersive roleplay style. Stay in character. Never write {{user}}'s dialogue or actions.";
 
@@ -4194,7 +4194,7 @@ function renderSettingsView(open) {
       <label class="field inline"><span class="label">Main character share<span class="hint">named in at least this share of scenes (0 to 1): only facts that match the latest messages are sent</span></span><input inputmode="decimal" data-ext-weft="injectMainShare" value="${S.settings.ext.weft.injectMainShare}"></label>
       <label class="field inline"><span class="label">Past scenes at once<span class="hint">0 turns scene recall off</span></span><input inputmode="numeric" data-ext-weft="injectScenes" value="${S.settings.ext.weft.injectScenes}"></label>
       <label class="toggle"><span><span class="label">Send the story so far</span><span class="hint">Every scene the people in play share, oldest first, so their shared history is never partial. Older ones are shortened only if they don't fit.</span></span><input type="checkbox" data-ext-weft-toggle="injectStory" ${S.settings.ext.weft.injectStory !== false ? 'checked' : ''}><i></i></label>
-      <label class="field inline"><span class="label">Story so far, at most<span class="hint">tokens; starts at 2,000 and grows with the chat up to this</span></span><input inputmode="numeric" data-ext-weft="injectStoryMax" value="${S.settings.ext.weft.injectStoryMax}"></label>
+      <label class="field inline"><span class="label">Story so far, at most<span class="hint">tokens; starts at 3,000 and grows with the chat up to this</span></span><input inputmode="numeric" data-ext-weft="injectStoryMax" value="${S.settings.ext.weft.injectStoryMax}"></label>
       <label class="toggle"><span><span class="label">Recall scenes by topic</span><span class="hint">When the recent messages are clearly about one thing (intimacy, an injury, danger, money, family, feelings), recall the scenes where that was strongest. This is what finds earlier scenes between people who are in every scene.</span></span><input type="checkbox" data-ext-weft-toggle="injectByTopic" ${S.settings.ext.weft.injectByTopic !== false ? 'checked' : ''}><i></i></label>
       <label class="field inline"><span class="label">Names needed to recall a scene<span class="hint">higher = rarer</span></span><input inputmode="numeric" data-ext-weft="injectSceneHits" value="${S.settings.ext.weft.injectSceneHits}"></label>
       <label class="field inline"><span class="label">Ignore names in more than<span class="hint">this share of scenes (0 to 1)</span></span><input inputmode="decimal" data-ext-weft="injectSceneShare" value="${S.settings.ext.weft.injectSceneShare}"></label>

@@ -167,7 +167,7 @@ assert.ok(!buildInjection({ messages, scenes, archive: archive(), cfg: { injectS
   const r = buildInjection({ messages: sm, scenes: ss, archive: buildArchive(ss, newReview()), cfg: { injectState: false, injectRecentTokens: 200 } });
   assert.match(r.text, /The story so far, in order \(the scenes Rachel and Sam share\):/);
   const order = [...r.text.matchAll(/- \(messages (\d+)-/g)].map((m) => +m[1]);
-  assert.deepEqual(order, [1, 11, 21, 31, 41]); // scene 6 (51-60) is still in the chat window; the rest all appear, oldest first
+  assert.deepEqual(order, [1, 11, 21, 31, 41]); // all of them, oldest first (scene 6 no longer matches the edited last message, so it is not used)
   assert.ok(!/rel 0/.test(r.text), 'relationship notes are skipped when the full scenes are already there');
   const it = r.items.find((x) => x.kind === 'story');
   assert.ok(it && it.tokens > 0);
@@ -178,9 +178,14 @@ assert.ok(!buildInjection({ messages, scenes, archive: archive(), cfg: { injectS
   assert.equal(sc2.complete, false);
   // off
   assert.ok(!buildInjection({ messages: sm, scenes: ss, archive: buildArchive(ss, newReview()), cfg: { injectState: false, injectStory: false, injectRecentTokens: 200 } }).items.some((x) => x.kind === 'story'));
-  assert.equal(storyBudgetFor(0), 2000);
-  assert.equal(storyBudgetFor(340000), 5580);
-  assert.equal(storyBudgetFor(5000000), 6000);
+  assert.equal(storyBudgetFor(0), 3000);
+  assert.equal(storyBudgetFor(100000), 5500);
+  assert.equal(storyBudgetFor(5000000), 10000);
+  // a scene only partly inside the verbatim window still has its summary sent (no gap)
+  const tq = 'He kissed her mouth and unbuttoned her shirt; her hips against his, naked skin, the bed, sex, lovers, intimate, desire, thighs.';
+  const part = matchThemes([{ id: 's1-10', from: 1, to: 10, summary: 'sex sexual lovers naked intimate sex sexual', facts: [], relationships: [] }], tq, { max: 1, skipFrom: 5, sceneMin: 1 });
+  assert.equal(part.length, 1);
+  assert.equal(matchThemes([{ id: 's8-10', from: 8, to: 10, summary: 'sex sexual lovers naked intimate sex sexual', facts: [], relationships: [] }], tq, { max: 1, skipFrom: 5, sceneMin: 1 }).length, 0);
 }
 assert.deepEqual(Object.keys(DEFAULT_INJECT).filter((k) => !k.startsWith('inject')), []);
 console.log('weft-inject tests passed');

@@ -15,7 +15,7 @@ export const DEFAULT_INJECT = Object.freeze({
   injectFacts: 6,         // most facts shown per person/place
   injectMainShare: 0.6,   // a name in at least this share of scenes counts as a main character
   injectStory: true,      // send the scenes the people in play share, in order, as the story so far
-  injectStoryMax: 6000,   // most tokens the story so far may use (it grows with the chat; older scenes are shortened first)
+  injectStoryMax: 10000,  // most tokens the story so far may use (it grows with the chat; older scenes are shortened only past this)
   injectScenes: 3,        // most past scenes recalled at once
   injectByTopic: true,    // also recall scenes by topic (an intimate moment recalls earlier intimate scenes)
   injectSceneShare: 0.25, // names found in more than this share of scenes don't count toward recalling a scene
@@ -120,7 +120,7 @@ export function properWords(text) {
  * in more than `share` of all scenes. One name is enough only if it belongs to a single scene.
  */
 export function matchScenes(scenes, queryText, { max, skipFrom, share = 0.25, hits = 2 }) {
-  const cand = scenes.filter((s) => !(skipFrom != null && s.to > skipFrom));
+  const cand = scenes.filter((s) => !(skipFrom != null && s.from > skipFrom));
   if (!cand.length || !max || scenes.length < 4) return []; // very few scenes: they are all near enough to be in the chat window anyway
   const { docs, df, N } = sceneDocs(scenes);
   const proper = properWords(queryText);
@@ -174,17 +174,17 @@ export function matchThemes(scenes, queryText, { max, skipFrom, sceneMin = 8, mi
   if (!dom) return [];
   const res = THEMES[dom.theme];
   return scenes
-    .filter((sc) => !(skipFrom != null && sc.to > skipFrom))
+    .filter((sc) => !(skipFrom != null && sc.from > skipFrom))
     .map((sc) => ({ scene: sc, theme: dom.theme, score: themeScore(sceneText(sc), res) }))
     .filter((x) => x.score >= sceneMin)
     .sort((a, b) => b.score - a.score || b.scene.from - a.scene.from)
     .slice(0, max);
 }
 
-/** Budget for the story-so-far block: grows slowly with the chat, clamped between 2,000 and `injectStoryMax`. */
+/** Budget for the story-so-far block: 3,000 plus 25 per 1,000 chat tokens, up to `injectStoryMax`. Sized so a few dozen scenes are sent whole. */
 export function storyBudgetFor(chatTok, cfg = DEFAULT_INJECT) {
-  const hi = Math.max(2000, Number(cfg.injectStoryMax) || DEFAULT_INJECT.injectStoryMax);
-  return Math.round(Math.min(hi, Math.max(2000, 1500 + (Number(chatTok) || 0) * 0.012)));
+  const hi = Math.max(3000, Number(cfg.injectStoryMax) || DEFAULT_INJECT.injectStoryMax);
+  return Math.round(Math.min(hi, Math.max(3000, 3000 + (Number(chatTok) || 0) * 0.025)));
 }
 
 /** Scene ids each entity appears in (facts or relationship notes). */
@@ -204,7 +204,7 @@ export function storyScenes(entities, scenes, playIds, { budget, skipFrom }) {
   const play = entities.filter((e) => playIds.has(e.id) && e.id !== 'unassigned').map((e) => ({ e, ids: sceneIdsOf(e) }));
   const pairs = [], keep = new Set();
   for (let i = 0; i < play.length; i++) for (let j = i + 1; j < play.length; j++) {
-    const shared = scenes.filter((sc) => play[i].ids.has(sc.id) && play[j].ids.has(sc.id) && !(skipFrom != null && sc.to > skipFrom));
+    const shared = scenes.filter((sc) => play[i].ids.has(sc.id) && play[j].ids.has(sc.id) && !(skipFrom != null && sc.from > skipFrom));
     if (!shared.length) continue;
     pairs.push({ a: play[i].e, b: play[j].e, count: shared.length });
     for (const sc of shared) keep.add(sc.id);
